@@ -1,9 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statfsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hostname, platform, release, arch, cpus, totalmem, freemem, uptime as osUptime, loadavg } from "node:os";
 import { formatDate } from "@nichijou/shared";
 import type { ButlerService } from "./butler.js";
+
+const PROCESS_START_TIME = Date.now();
 
 interface WeatherCache {
   data: { temp: number; tempMax: number; tempMin: number; weatherCode: number; description: string; location: string };
@@ -86,6 +89,46 @@ export class NichijouServer {
           llm: { baseUrl: config.llm.baseUrl, model: config.llm.model },
           channels,
           tokenUsage,
+        });
+        return;
+      }
+
+      if (path === "/api/system-info" && method === "GET") {
+        const totalMem = totalmem();
+        const freeMem = freemem();
+        const cpuInfo = cpus();
+        const cpuModel = cpuInfo[0]?.model ?? "未知";
+        const cpuCores = cpuInfo.length;
+        const load = loadavg();
+        const sysUptime = osUptime();
+        const procUptime = Math.floor((Date.now() - PROCESS_START_TIME) / 1000);
+
+        let diskTotal = 0;
+        let diskFree = 0;
+        try {
+          const stats = statfsSync(this.butler.storage.dataDir);
+          diskTotal = stats.blocks * stats.bsize;
+          diskFree = stats.bavail * stats.bsize;
+        } catch { /* ignore */ }
+
+        this.json(res, {
+          hostname: hostname(),
+          platform: platform(),
+          osRelease: release(),
+          arch: arch(),
+          cpuModel,
+          cpuCores,
+          memTotal: totalMem,
+          memUsed: totalMem - freeMem,
+          memFree: freeMem,
+          diskTotal,
+          diskUsed: diskTotal - diskFree,
+          diskFree,
+          loadAvg: load.map((l) => Math.round(l * 100) / 100),
+          sysUptime,
+          processUptime: procUptime,
+          nodeVersion: process.version,
+          pid: process.pid,
         });
         return;
       }

@@ -14,6 +14,36 @@ const ERR_FILE = join(LOG_DIR, "nichijou.err");
 
 mkdirSync(LOG_DIR, { recursive: true });
 
+function loadDotEnv(): void {
+  const candidates = [
+    join(process.cwd(), ".env"),
+    join(DATA_DIR, ".env"),
+  ];
+  for (const envPath of candidates) {
+    if (!existsSync(envPath)) continue;
+    try {
+      const content = readFileSync(envPath, "utf-8");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx < 1) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        let value = trimmed.slice(eqIdx + 1).trim();
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        if (!process.env[key]) {
+          process.env[key] = value;
+        }
+      }
+    } catch { /* ignore */ }
+    break;
+  }
+}
+
+loadDotEnv();
+
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
 
@@ -382,6 +412,16 @@ async function serve(): Promise<void> {
 
   const butler = new ButlerService();
   const config = butler.config.get();
+
+  const envLlmPatch: Record<string, string> = {};
+  if (process.env.LLM_BASE_URL) envLlmPatch.baseUrl = process.env.LLM_BASE_URL;
+  if (process.env.LLM_API_KEY) envLlmPatch.apiKey = process.env.LLM_API_KEY;
+  if (process.env.LLM_MODEL) envLlmPatch.model = process.env.LLM_MODEL;
+  if (Object.keys(envLlmPatch).length > 0) {
+    butler.config.update({ llm: { ...config.llm, ...envLlmPatch } } as any);
+    butler.refreshProvider();
+    console.log(`[Env] .env LLM 配置已加载`);
+  }
 
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : config.port;
 

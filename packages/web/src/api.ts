@@ -52,6 +52,27 @@ export const api = {
 
   completeSetup: () => request("/setup/complete", { method: "POST" }),
 
+  getSystemInfo: () =>
+    request<{
+      hostname: string;
+      platform: string;
+      osRelease: string;
+      arch: string;
+      cpuModel: string;
+      cpuCores: number;
+      memTotal: number;
+      memUsed: number;
+      memFree: number;
+      diskTotal: number;
+      diskUsed: number;
+      diskFree: number;
+      loadAvg: number[];
+      sysUptime: number;
+      processUptime: number;
+      nodeVersion: string;
+      pid: number;
+    }>("/system-info"),
+
   getWeather: (lat = "39.9", lon = "116.4") =>
     request<{ temp: number | null; tempMax: number | null; tempMin: number | null; weatherCode: number; description: string; location: string }>(`/board/weather?lat=${lat}&lon=${lon}`),
 

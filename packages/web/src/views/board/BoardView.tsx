@@ -1,7 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { Solar } from "lunar-javascript";
 import { api } from "../../api";
+
+interface SystemInfo {
+  hostname: string;
+  platform: string;
+  cpuCores: number;
+  memTotal: number;
+  memUsed: number;
+  loadAvg: number[];
+  processUptime: number;
+  nodeVersion: string;
+}
 
 // --- Types ---
 
@@ -150,23 +161,34 @@ export function BoardView() {
   const [soul, setSoul] = useState("");
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [weekSchedule, setWeekSchedule] = useState<WeekSchedule>({});
+  const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval>>();
+
+  const loadSysInfo = useCallback(async () => {
+    try {
+      const data = await api.getSystemInfo();
+      setSysInfo(data);
+    } catch { /* ignore */ }
+  }, []);
 
   useEffect(() => {
     loadBoardData();
     loadWeather();
     loadWeekSchedule();
+    loadSysInfo();
 
     tickRef.current = setInterval(() => setNow(new Date()), 1000);
     const dataInterval = setInterval(loadBoardData, 5 * 60 * 1000);
     const weatherInterval = setInterval(loadWeather, 30 * 60 * 1000);
     const weekInterval = setInterval(loadWeekSchedule, 10 * 60 * 1000);
+    const sysInterval = setInterval(loadSysInfo, 30 * 1000);
 
     return () => {
       clearInterval(tickRef.current);
       clearInterval(dataInterval);
       clearInterval(weatherInterval);
       clearInterval(weekInterval);
+      clearInterval(sysInterval);
     };
   }, []);
 
@@ -513,11 +535,34 @@ export function BoardView() {
             </div>
           </div>
 
-          {/* --- Bottom: Family Menu (placeholder, spans full width) --- */}
-          <div className="col-span-3 border-t border-[#2e2a26] pt-4 pb-2">
+          {/* --- Bottom Bar --- */}
+          <div className="col-span-3 border-t border-[#2e2a26] pt-3 pb-1">
             <div className="flex items-center justify-between">
-              <p className="text-xs text-[#5a5448] tracking-[0.2em]">本周菜单</p>
-              <p className="text-xs text-[#3a3530]">通过微信发送菜品给{butlerName}来建立家庭菜谱</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-[#5a5448] tracking-[0.2em]">本周菜单</p>
+                <span className="text-xs text-[#3a3530]">· 通过微信发送菜品给{butlerName}来建立家庭菜谱</span>
+              </div>
+              {sysInfo && (
+                <div className="flex items-center gap-4 text-[11px] text-[#5a5448]">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#6aaa6a] animate-pulse" />
+                    {sysInfo.hostname}
+                  </span>
+                  <span>
+                    内存 {Math.round((sysInfo.memUsed / sysInfo.memTotal) * 100)}%
+                  </span>
+                  <span>
+                    负载 {sysInfo.loadAvg[0]?.toFixed(1)}
+                  </span>
+                  <span>
+                    运行 {sysInfo.processUptime >= 86400
+                      ? `${Math.floor(sysInfo.processUptime / 86400)}天`
+                      : sysInfo.processUptime >= 3600
+                        ? `${Math.floor(sysInfo.processUptime / 3600)}小时`
+                        : `${Math.floor(sysInfo.processUptime / 60)}分钟`}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 

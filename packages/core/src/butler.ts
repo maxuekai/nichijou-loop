@@ -3,6 +3,7 @@ import type { LLMProvider } from "@nichijou/ai";
 import { AgentSession, createAgentSession } from "@nichijou/agent";
 import type { AgentEvent } from "@nichijou/agent";
 import type { FamilyMember, InboundMessage, ToolDefinition, Routine } from "@nichijou/shared";
+import { hostname, platform, arch, cpus, totalmem, freemem, uptime as osUptime, loadavg } from "node:os";
 import type { Channel } from "./gateway/channel.js";
 import type { ChannelStatus } from "@nichijou/shared";
 import { StorageManager } from "./storage/storage.js";
@@ -433,11 +434,40 @@ export class ButlerService {
         const cfg = this.config.get();
         const wechatStatus = this._wechatChannel?.getStatus();
         const usage = this.db.getTokenUsage(new Date().toISOString().slice(0, 10));
+
+        const totalMem = totalmem();
+        const usedMem = totalMem - freemem();
+        const memPct = Math.round((usedMem / totalMem) * 100);
+        const cpuInfo = cpus();
+        const load = loadavg();
+        const sysUp = osUptime();
+        const procUp = Math.floor(process.uptime());
+
+        const formatBytes = (b: number) => {
+          if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)}GB`;
+          return `${(b / 1048576).toFixed(0)}MB`;
+        };
+        const formatUptime = (s: number) => {
+          const d = Math.floor(s / 86400);
+          const h = Math.floor((s % 86400) / 3600);
+          const m = Math.floor((s % 3600) / 60);
+          return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分钟` : `${m}分钟`;
+        };
+
         return [
           "📊 系统状态",
-          `LLM: ${cfg.llm.model} @ ${cfg.llm.baseUrl}`,
-          `微信: ${wechatStatus?.connected ? "已连接" : "未连接"} (${wechatStatus?.connectedMembers ?? 0}人在线)`,
-          `今日 Token: prompt=${usage.promptTokens} completion=${usage.completionTokens}`,
+          "",
+          `🖥 设备: ${hostname()} (${platform()}/${arch()})`,
+          `💻 CPU: ${cpuInfo[0]?.model ?? "未知"} (${cpuInfo.length}核)`,
+          `📈 负载: ${load.map((l) => l.toFixed(2)).join(" / ")}`,
+          `🧠 内存: ${formatBytes(usedMem)}/${formatBytes(totalMem)} (${memPct}%)`,
+          `⏱ 系统运行: ${formatUptime(sysUp)}`,
+          `🤖 管家运行: ${formatUptime(procUp)} (PID: ${process.pid})`,
+          `🔧 Node.js: ${process.version}`,
+          "",
+          `🧩 LLM: ${cfg.llm.model} @ ${cfg.llm.baseUrl}`,
+          `📱 微信: ${wechatStatus?.connected ? "已连接" : "未连接"} (${wechatStatus?.connectedMembers ?? 0}人在线)`,
+          `📊 今日 Token: prompt=${usage.promptTokens} completion=${usage.completionTokens}`,
         ].join("\n");
       }
 
