@@ -51,4 +51,21 @@ export const api = {
     request<{ ok: boolean; error?: string }>("/setup/test-llm", { method: "POST", body: JSON.stringify(config) }),
 
   completeSetup: () => request("/setup/complete", { method: "POST" }),
+
+  getWeather: (lat = "39.9", lon = "116.4") =>
+    request<{ temp: number | null; tempMax: number | null; tempMin: number | null; weatherCode: number; description: string; location: string }>(`/board/weather?lat=${lat}&lon=${lon}`),
+
+  getWeekSchedule: () =>
+    request<{ schedule: Record<string, Record<string, string[]>> }>("/board/week-schedule"),
+
+  getBoardData: () =>
+    request<{
+      family: { id: string; name: string } | null;
+      members: Array<{
+        id: string; name: string; role: string;
+        profile: string | null;
+        dayPlan: { date: string; memberId: string; items: Array<{ id: string; title: string; timeSlot?: string; time?: string; source: string; reminders: Array<{ offsetMinutes: number; message: string; channel: string }> }> };
+      }>;
+      soul: string;
+    }>("/board/data"),
 };

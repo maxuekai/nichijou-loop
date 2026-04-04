@@ -2,7 +2,25 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatDate } from "@nichijou/shared";
 import type { ButlerService } from "./butler.js";
+
+interface WeatherCache {
+  data: { temp: number; tempMax: number; tempMin: number; weatherCode: number; description: string; location: string };
+  fetchedAt: number;
+}
+
+const WEATHER_CACHE_TTL = 30 * 60 * 1000;
+let weatherCache: WeatherCache | null = null;
+
+const WMO_DESCRIPTIONS: Record<number, string> = {
+  0: "晴", 1: "大部晴朗", 2: "局部多云", 3: "多云",
+  45: "雾", 48: "雾凇", 51: "小毛毛雨", 53: "毛毛雨", 55: "大毛毛雨",
+  61: "小雨", 63: "中雨", 65: "大雨", 66: "冻雨", 67: "大冻雨",
+  71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
+  80: "阵雨", 81: "中阵雨", 82: "大阵雨",
+  85: "小阵雪", 86: "大阵雪", 95: "雷暴", 96: "雷暴伴冰雹", 99: "强雷暴伴冰雹",
+};
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -180,6 +198,18 @@ export class NichijouServer {
         return;
       }
 
+      if (path.match(/^\/api\/members\/[^/]+\/generate-routines$/) && method === "POST") {
+        const memberId = path.split("/")[3]!;
+        try {
+          const routines = await this.butler.generateRoutinesFromProfile(memberId);
+          this.json(res, { ok: true, routines });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.json(res, { ok: false, error: msg });
+        }
+        return;
+      }
+
       if (path.match(/^\/api\/members\/[^/]+\/apply-routines$/) && method === "POST") {
         const memberId = path.split("/")[3]!;
         const body = await this.readBody(req) as { routines: Array<Record<string, unknown>> };
@@ -240,6 +270,34 @@ export class NichijouServer {
         const memberId = path.split("/")[3]!;
         const logs = this.butler.db.getConversationLogs(memberId, 100);
         this.json(res, { logs });
+        return;
+      }
+
+      if (path.match(/^\/api\/routines\/[^/]+\/[^/]+$/) && method === "PUT") {
+        const parts = path.split("/");
+        const memberId = parts[3]!;
+        const body = await this.readBody(req) as Record<string, unknown>;
+        try {
+          this.butler.routineEngine.setRoutine(memberId, body as any);
+          this.json(res, { ok: true });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.json(res, { ok: false, error: msg });
+        }
+        return;
+      }
+
+      if (path.match(/^\/api\/routines\/[^/]+\/[^/]+$/) && method === "DELETE") {
+        const parts = path.split("/");
+        const memberId = parts[3]!;
+        const routineId = parts[4]!;
+        try {
+          this.butler.routineEngine.deleteRoutine(memberId, routineId);
+          this.json(res, { ok: true });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.json(res, { ok: false, error: msg });
+        }
         return;
       }
 
@@ -373,6 +431,89 @@ export class NichijouServer {
           const msg = err instanceof Error ? err.message : String(err);
           this.json(res, { ok: false, error: msg });
         }
+        return;
+      }
+
+      // --- Board endpoints ---
+      if (path === "/api/board/weather" && method === "GET") {
+        const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+        const lat = url.searchParams.get("lat") ?? "39.9";
+        const lon = url.searchParams.get("lon") ?? "116.4";
+
+        if (weatherCache && Date.now() - weatherCache.fetchedAt < WEATHER_CACHE_TTL) {
+          this.json(res, weatherCache.data);
+          return;
+        }
+
+        try {
+          const apiUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1`;
+          const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
+          const json = await resp.json() as {
+            current: { temperature_2m: number; weather_code: number };
+            daily: { temperature_2m_max: number[]; temperature_2m_min: number[] };
+          };
+
+          let location = "";
+          try {
+            const geoResp = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=zh&zoom=10`, { signal: AbortSignal.timeout(5000), headers: { "User-Agent": "NichijouLoop/1.0" } });
+            const geoJson = await geoResp.json() as { address?: { city?: string; town?: string; county?: string; state?: string; suburb?: string; district?: string } };
+            const addr = geoJson.address;
+            if (addr) {
+              location = addr.city || addr.town || addr.county || addr.district || addr.suburb || addr.state || "";
+            }
+          } catch { /* location is optional */ }
+
+          const data = {
+            temp: Math.round(json.current.temperature_2m),
+            tempMax: Math.round(json.daily.temperature_2m_max[0]!),
+            tempMin: Math.round(json.daily.temperature_2m_min[0]!),
+            weatherCode: json.current.weather_code,
+            description: WMO_DESCRIPTIONS[json.current.weather_code] ?? "未知",
+            location,
+          };
+          weatherCache = { data, fetchedAt: Date.now() };
+          this.json(res, data);
+        } catch {
+          this.json(res, { temp: null, description: "获取失败", weatherCode: -1, tempMax: null, tempMin: null, location: "" });
+        }
+        return;
+      }
+
+      if (path === "/api/board/week-schedule" && method === "GET") {
+        const members = this.butler.familyManager.getMembers();
+        const today = new Date();
+        const weekStart = new Date(today);
+        weekStart.setDate(today.getDate() - today.getDay());
+
+        const schedule: Record<string, Record<string, string[]>> = {};
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(weekStart);
+          d.setDate(weekStart.getDate() + i);
+          const dateStr = formatDate(d);
+          schedule[dateStr] = {};
+          for (const member of members) {
+            const plan = this.butler.routineEngine.resolveDayPlan(member.id, d);
+            if (plan.items.length > 0) {
+              schedule[dateStr]![member.name] = plan.items.map((it) => it.title);
+            }
+          }
+        }
+        this.json(res, { schedule });
+        return;
+      }
+
+      if (path === "/api/board/data" && method === "GET") {
+        const familyData = this.butler.familyManager.getFamily();
+        const members = this.butler.familyManager.getMembers();
+        const soul = this.butler.storage.readSoul();
+
+        const memberDetails = members.map((m) => {
+          const profile = this.butler.storage.readMemberProfile(m.id);
+          const dayPlan = this.butler.routineEngine.resolveDayPlan(m.id, new Date());
+          return { ...m, profile, dayPlan };
+        });
+
+        this.json(res, { family: familyData, members: memberDetails, soul });
         return;
       }
 

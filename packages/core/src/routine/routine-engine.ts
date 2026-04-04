@@ -28,6 +28,13 @@ export class RoutineEngine {
     this.saveRoutines(memberId, routines);
   }
 
+  deleteRoutine(memberId: string, routineId: string): void {
+    const routines = this.getAllRoutines(memberId);
+    const filtered = routines.filter((r) => r.id !== routineId);
+    if (filtered.length === routines.length) throw new Error("Routine not found");
+    this.saveRoutines(memberId, filtered);
+  }
+
   archiveRoutine(memberId: string, routineId: string): void {
     const routines = this.getAllRoutines(memberId);
     const routine = routines.find((r) => r.id === routineId);

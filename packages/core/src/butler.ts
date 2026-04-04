@@ -135,7 +135,7 @@ export class ButlerService {
     if (isOnboarding) {
       prompt += `\n# 新成员引导\n\n`;
       prompt += `这是一位刚刚加入家庭的新成员。请：\n`;
-      prompt += `1. 热情欢迎，简要介绍你作为家庭管家能做什么（周期计划、健身提醒、行程规划、买菜推荐、做饭菜单、定时提醒等）\n`;
+      prompt += `1. 热情欢迎，简要介绍你作为家庭管家能做什么（7 days 习惯管理、健身提醒、行程规划、买菜推荐、做饭菜单、定时提醒等）\n`;
       prompt += `2. 引导他/她告诉你日常生活习惯（比如几点起床、是否健身、周末安排等）\n`;
       prompt += `3. 鼓励他/她随时可以补充和调整\n`;
       prompt += `4. 语气亲切自然，像一个贴心的家人\n`;
@@ -191,15 +191,24 @@ export class ButlerService {
     }
   }
 
+  private static readonly FINISH_KEYWORDS = ["好了", "完成", "没有了", "差不多了", "就这些", "结束", "可以了", "完成了", "no more", "done"];
+
   /**
    * Handle an inbound WeChat/channel message.
-   * Collects all events, logs them, and sends only the clean final reply.
+   * If the member has an active interview, route to the interview flow.
+   * Otherwise, normal agent session.
    */
   private async handleMessage(member: FamilyMember, msg: InboundMessage): Promise<void> {
     // Slash commands (admin only)
     if (msg.text.startsWith("/")) {
       const reply = await this.handleSlashCommand(member, msg.text);
       await this.gateway.sendToMember(member.id, reply);
+      return;
+    }
+
+    // Route to interview if active
+    if (this.hasActiveInterview(member.id)) {
+      await this.handleInterviewMessage(member, msg.text);
       return;
     }
 
@@ -226,17 +235,65 @@ export class ButlerService {
 
     const reply = lastTurnText || "（无回复）";
 
-    // Save full conversation log
-    this.db.saveConversationLog(
-      member.id,
-      msg.text,
-      reply,
-      JSON.stringify(events),
-    );
+    this.db.saveConversationLog(member.id, msg.text, reply, JSON.stringify(events));
     this.db.saveChat(member.id, "user", msg.text);
     this.db.saveChat(member.id, "assistant", reply);
 
     await this.gateway.sendToMember(member.id, reply);
+  }
+
+  /**
+   * Handle a message during an active interview session (via WeChat).
+   * Detects finish keywords and auto-completes the interview.
+   */
+  private async handleInterviewMessage(member: FamilyMember, text: string): Promise<void> {
+    const trimmed = text.trim();
+    const isFinish = ButlerService.FINISH_KEYWORDS.some(
+      (kw) => trimmed === kw || trimmed.toLowerCase() === kw,
+    );
+
+    if (isFinish) {
+      await this.gateway.sendToMember(member.id, "好的，让我来整理一下你的生活习惯，稍等片刻…");
+      try {
+        const result = await this.finishInterview(member.id);
+        let summary = "✅ 已为你整理好个人档案！\n\n";
+        if (result.profile) {
+          const lines = result.profile.split("\n").slice(0, 8);
+          summary += `📋 档案摘要：\n${lines.join("\n")}\n`;
+          if (result.profile.split("\n").length > 8) summary += "...\n";
+        }
+        if (result.routines.length > 0) {
+          summary += `\n🔄 为你创建了 ${result.routines.length} 个 7 days 习惯：\n`;
+          for (const r of result.routines) {
+            const days = r.weekdays.map((d) => ["日", "一", "二", "三", "四", "五", "六"][d]).join("、");
+            summary += `  · ${r.title}（每周${days}）\n`;
+          }
+        }
+        summary += "\n你可以随时告诉我调整计划，或在管理页面查看和编辑。";
+
+        // Auto-apply profile and routines
+        if (result.profile) {
+          this.storage.writeMemberProfile(member.id, result.profile);
+        }
+        if (result.routines.length > 0) {
+          this.applyRoutines(member.id, result.routines);
+        }
+
+        await this.gateway.sendToMember(member.id, summary);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await this.gateway.sendToMember(member.id, `整理档案时出了点问题：${msg}\n你可以继续对话，或者输入「完成」重试。`);
+      }
+      return;
+    }
+
+    try {
+      const reply = await this.interviewChat(member.id, trimmed);
+      await this.gateway.sendToMember(member.id, reply);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await this.gateway.sendToMember(member.id, `出了点问题：${errMsg}`);
+    }
   }
 
   /**
@@ -326,30 +383,25 @@ export class ButlerService {
 
     await send(`已为你创建账号「${trimmed}」并绑定成功！`);
 
+    // Auto-start interview to collect lifestyle habits
     setTimeout(async () => {
       try {
-        const model = this.config.get().llm.model;
-        const session = this.getOrCreateSession(newMember.id, true);
-        const events: Array<{ type: string; data: unknown }> = [];
-        let lastText = "";
-        const unsub = session.subscribe((e) => {
-          events.push({ type: e.type, data: e });
-          if (e.type === "turn_end") {
-            if (e.message.content) lastText = e.message.content;
-            if (e.usage) this.db.logTokenUsage(newMember.id, e.usage.promptTokens, e.usage.completionTokens, model);
-          }
-        });
-        try {
-          await session.prompt("你好，我是新加入的成员，请介绍一下你能帮我做什么。");
-        } finally {
-          unsub();
-        }
-        if (lastText) {
-          this.db.saveConversationLog(newMember.id, "[新成员引导]", lastText, JSON.stringify(events));
-          await this.gateway.sendToMember(newMember.id, lastText);
-        }
+        const firstReply = await this.startInterview(newMember.id);
+        const intro = [
+          `欢迎加入！我是你的家庭管家，接下来让我了解一下你的日常生活习惯，以便为你制定合适的计划 🏠\n`,
+          firstReply,
+          `\n（回答完所有问题后，输入「完成」即可自动生成你的个人档案和 7 days 习惯）`,
+        ].join("\n");
+        await this.gateway.sendToMember(newMember.id, intro);
+        this.db.saveConversationLog(newMember.id, "[新成员引导]", intro, "[]");
       } catch (err) {
-        console.error("[Onboarding] 引导消息发送失败:", err);
+        console.error("[Onboarding] 引导对话启动失败:", err);
+        try {
+          await this.gateway.sendToMember(
+            newMember.id,
+            "欢迎加入！你可以直接和我聊天，告诉我你的日常生活习惯，我来帮你安排计划。",
+          );
+        } catch { /* ignore */ }
       }
     }, 1500);
   }
@@ -482,7 +534,7 @@ export class ButlerService {
       prompt += `\n\n已有档案（可以参考，询问是否有变化）：\n${existingProfile}`;
     }
     if (existing.length > 0) {
-      prompt += `\n\n已有的周期习惯：\n${existing.map((r) => `- ${r.title}`).join("\n")}`;
+      prompt += `\n\n已有的 7 days 习惯：\n${existing.map((r) => `- ${r.title}`).join("\n")}`;
     }
     return prompt;
   }
@@ -526,7 +578,7 @@ export class ButlerService {
 
     const existing = this.routineEngine.getRoutines(memberId);
     const existingDesc = existing.length > 0
-      ? `\n已有的周期习惯（避免重复）：\n${existing.map((r) => `- ${r.title}`).join("\n")}`
+      ? `\n已有的 7 days 习惯（避免重复）：\n${existing.map((r) => `- ${r.title}`).join("\n")}`
       : "";
 
     const summaryPrompt = [
@@ -541,15 +593,15 @@ export class ButlerService {
       "- 周末安排",
       "- 其他特点",
       "",
-      "## 第二部分：周期习惯 JSON",
-      "从对话中提取可以设置为周期性计划的习惯，输出一个 JSON 数组。",
+      "## 第二部分：7 days 习惯 JSON",
+      "从对话中提取可以设置为 7 days（以一周为周期）的习惯，输出一个 JSON 数组。",
       "格式：",
       '```json',
       '[{ "title": "习惯名称", "weekdays": [1,3,5], "timeSlot": "morning|afternoon|evening", "time": "18:30", "reminders": [{ "offsetMinutes": 30, "message": "提醒内容", "channel": "wechat" }] }]',
       '```',
       "",
       "字段说明：weekdays 用 0-6 表示（0=周日），timeSlot 可选，time 可选（精确时间），reminders 可选。",
-      "只提取用户明确提到的周期性习惯，不要凭空推测。",
+      "只提取用户明确提到的每周重复习惯，不要凭空推测。",
       "提醒消息要具体实用。",
       existingDesc,
       "",
@@ -616,6 +668,73 @@ export class ButlerService {
 
   hasActiveInterview(memberId: string): boolean {
     return this.interviewSessions.has(memberId);
+  }
+
+  async generateRoutinesFromProfile(memberId: string): Promise<Routine[]> {
+    const profile = this.storage.readMemberProfile(memberId);
+    if (!profile || profile.trim().length < 10) {
+      throw new Error("成员档案内容不足，请先完善档案");
+    }
+
+    const existing = this.routineEngine.getRoutines(memberId);
+    const existingDesc = existing.length > 0
+      ? `\n已有的 7 days 习惯（避免重复）：\n${existing.map((r) => `- ${r.title}`).join("\n")}`
+      : "";
+
+    const prompt = [
+      "根据以下成员档案，提取其中可以设置为 7 days（以一周为周期）的习惯。",
+      "",
+      "## 成员档案",
+      profile,
+      existingDesc,
+      "",
+      "## 输出要求",
+      "输出一个 JSON 数组，每个元素代表一个每周重复的习惯。",
+      "格式：",
+      '```json',
+      '[{ "title": "习惯名称", "weekdays": [1,3,5], "timeSlot": "morning|afternoon|evening", "time": "18:30", "reminders": [{ "offsetMinutes": 30, "message": "提醒内容", "channel": "wechat" }] }]',
+      '```',
+      "",
+      "字段说明：weekdays 用 0-6 表示（0=周日），timeSlot 可选，time 可选（精确时间），reminders 可选。",
+      "只提取档案中明确提到的每周重复习惯，不要凭空推测。",
+      "提醒消息要具体实用。",
+      "只输出 JSON 数组，不要有其他内容。",
+    ].join("\n");
+
+    const provider = this.getProvider();
+    const result = await provider.chat({
+      messages: [{ role: "user", content: prompt }],
+      maxTokens: 2000,
+    });
+    this.logProviderUsage(memberId, result.usage);
+
+    const text = result.message.content;
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as Array<{
+        title: string;
+        weekdays: number[];
+        timeSlot?: string;
+        time?: string;
+        reminders?: Array<{ offsetMinutes: number; message: string; channel: string }>;
+      }>;
+      return parsed.map((item) => ({
+        id: "",
+        title: item.title,
+        weekdays: item.weekdays,
+        timeSlot: item.timeSlot as Routine["timeSlot"],
+        time: item.time,
+        reminders: (item.reminders ?? []).map((r) => ({
+          offsetMinutes: r.offsetMinutes,
+          message: r.message,
+          channel: (r.channel as "wechat" | "dashboard" | "both") ?? "wechat",
+        })),
+      }));
+    } catch {
+      return [];
+    }
   }
 
   applyRoutines(memberId: string, routines: Routine[]): void {
