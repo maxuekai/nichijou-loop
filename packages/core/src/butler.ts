@@ -47,6 +47,7 @@ export class ButlerService {
   private provider: LLMProvider | null = null;
   private sessions = new Map<string, AgentSession>();
   private _wechatChannel: WeChatChannelLike | null = null;
+  private interviewSessions = new Map<string, Array<{ role: "user" | "assistant" | "system"; content: string }>>();
 
   constructor(dataDir?: string) {
     this.storage = new StorageManager(dataDir);
@@ -168,15 +169,26 @@ export class ButlerService {
    */
   async chat(memberId: string, input: string, onEvent?: (event: AgentEvent) => void): Promise<string> {
     const session = this.getOrCreateSession(memberId);
+    const model = this.config.get().llm.model;
+
+    const unsub = session.subscribe((event) => {
+      if (event.type === "turn_end" && event.usage) {
+        this.db.logTokenUsage(memberId, event.usage.promptTokens, event.usage.completionTokens, model);
+      }
+    });
+
     if (onEvent) {
       session.subscribe(onEvent);
     }
-    const response = await session.prompt(input);
 
-    this.db.saveChat(memberId, "user", input);
-    this.db.saveChat(memberId, "assistant", response);
-
-    return response;
+    try {
+      const response = await session.prompt(input);
+      this.db.saveChat(memberId, "user", input);
+      this.db.saveChat(memberId, "assistant", response);
+      return response;
+    } finally {
+      unsub();
+    }
   }
 
   /**
@@ -194,11 +206,15 @@ export class ButlerService {
     const session = this.getOrCreateSession(member.id);
     const events: Array<{ type: string; data: unknown }> = [];
     let lastTurnText = "";
+    const model = this.config.get().llm.model;
 
     const unsubscribe = session.subscribe((event) => {
       events.push({ type: event.type, data: event });
-      if (event.type === "turn_end" && "message" in event && event.message.content) {
-        lastTurnText = event.message.content;
+      if (event.type === "turn_end") {
+        if (event.message.content) lastTurnText = event.message.content;
+        if (event.usage) {
+          this.db.logTokenUsage(member.id, event.usage.promptTokens, event.usage.completionTokens, model);
+        }
       }
     });
 
@@ -264,16 +280,17 @@ export class ButlerService {
 
       await send(`已绑定到「${existingMember.name}」！现在你可以直接和管家对话了。`);
 
-      // Trigger a short intro (not full onboarding since they're existing)
       setTimeout(async () => {
         try {
+          const model = this.config.get().llm.model;
           const session = this.getOrCreateSession(existingMember.id);
           const events: Array<{ type: string; data: unknown }> = [];
           let lastText = "";
           const unsub = session.subscribe((e) => {
             events.push({ type: e.type, data: e });
-            if (e.type === "turn_end" && "message" in e && e.message.content) {
-              lastText = e.message.content;
+            if (e.type === "turn_end") {
+              if (e.message.content) lastText = e.message.content;
+              if (e.usage) this.db.logTokenUsage(existingMember.id, e.usage.promptTokens, e.usage.completionTokens, model);
             }
           });
           try {
@@ -309,16 +326,17 @@ export class ButlerService {
 
     await send(`已为你创建账号「${trimmed}」并绑定成功！`);
 
-    // Trigger onboarding flow
     setTimeout(async () => {
       try {
+        const model = this.config.get().llm.model;
         const session = this.getOrCreateSession(newMember.id, true);
         const events: Array<{ type: string; data: unknown }> = [];
         let lastText = "";
         const unsub = session.subscribe((e) => {
           events.push({ type: e.type, data: e });
-          if (e.type === "turn_end" && "message" in e && e.message.content) {
-            lastText = e.message.content;
+          if (e.type === "turn_end") {
+            if (e.message.content) lastText = e.message.content;
+            if (e.usage) this.db.logTokenUsage(newMember.id, e.usage.promptTokens, e.usage.completionTokens, model);
           }
         });
         try {
@@ -420,76 +438,184 @@ export class ButlerService {
     }
   }
 
-  async generateRoutinesFromProfile(memberId: string): Promise<Routine[]> {
-    const profile = this.storage.readMemberProfile(memberId);
-    if (!profile || profile.trim().length === 0) return [];
+  private logProviderUsage(memberId: string, usage: { promptTokens: number; completionTokens: number }): void {
+    if (usage.promptTokens > 0 || usage.completionTokens > 0) {
+      const model = this.config.get().llm.model;
+      this.db.logTokenUsage(memberId, usage.promptTokens, usage.completionTokens, model);
+    }
+  }
+
+  private buildInterviewSystemPrompt(memberId: string): string {
+    const member = this.familyManager.getMember(memberId);
+    const existingProfile = this.storage.readMemberProfile(memberId);
+    const existing = this.routineEngine.getRoutines(memberId);
+
+    let prompt = [
+      "你是一个贴心的家庭管家，正在通过对话了解一位家庭成员的日常生活习惯。",
+      "",
+      "# 对话规则",
+      "- 每次只问一个问题，不要一次性列出多个问题",
+      "- 语气亲切自然，像朋友聊天一样",
+      "- 根据用户的回答进行追问和展开，而不是机械地按列表提问",
+      "- 如果用户的回答比较简短，可以追问具体细节（时间、频率等）",
+      "- 如果用户说「没有」或「不需要」，尊重并继续下一个话题",
+      "",
+      "# 需要了解的方面（自然地覆盖，不必按顺序）",
+      "- 作息时间（起床、睡觉的大致时间）",
+      "- 工作/学习安排（工作日节奏、通勤等）",
+      "- 运动健身习惯（种类、频率、时间）",
+      "- 饮食偏好和做饭习惯",
+      "- 周末安排和兴趣爱好",
+      "- 需要定期提醒的事情",
+      "- 其他希望管家帮忙的事情",
+      "",
+      "# 注意",
+      "- 不要自作主张帮用户做决定",
+      "- 用户说的每个习惯都很重要，认真记录",
+      "- 在对话过程中可以简短确认你听到的信息",
+    ].join("\n");
+
+    if (member) {
+      prompt += `\n\n当前成员：${member.name}`;
+    }
+    if (existingProfile) {
+      prompt += `\n\n已有档案（可以参考，询问是否有变化）：\n${existingProfile}`;
+    }
+    if (existing.length > 0) {
+      prompt += `\n\n已有的周期习惯：\n${existing.map((r) => `- ${r.title}`).join("\n")}`;
+    }
+    return prompt;
+  }
+
+  async startInterview(memberId: string): Promise<string> {
+    const systemPrompt = this.buildInterviewSystemPrompt(memberId);
+    const messages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: "你好，我想完善一下我的个人档案和生活习惯。" },
+    ];
+
+    const provider = this.getProvider();
+    const result = await provider.chat({ messages, maxTokens: 500 });
+    const reply = result.message.content;
+
+    this.logProviderUsage(memberId, result.usage);
+    messages.push({ role: "assistant", content: reply });
+    this.interviewSessions.set(memberId, messages);
+
+    return reply;
+  }
+
+  async interviewChat(memberId: string, userMessage: string): Promise<string> {
+    const messages = this.interviewSessions.get(memberId);
+    if (!messages) throw new Error("没有进行中的引导对话，请先开始引导");
+
+    messages.push({ role: "user", content: userMessage });
+
+    const provider = this.getProvider();
+    const result = await provider.chat({ messages, maxTokens: 500 });
+    const reply = result.message.content;
+
+    this.logProviderUsage(memberId, result.usage);
+    messages.push({ role: "assistant", content: reply });
+    return reply;
+  }
+
+  async finishInterview(memberId: string): Promise<{ profile: string; routines: Routine[] }> {
+    const messages = this.interviewSessions.get(memberId);
+    if (!messages) throw new Error("没有进行中的引导对话");
 
     const existing = this.routineEngine.getRoutines(memberId);
     const existingDesc = existing.length > 0
-      ? `\n\n当前已有的周期习惯（避免重复创建）：\n${existing.map((r) => `- ${r.title} (${r.weekdays.map((d) => ["日","一","二","三","四","五","六"][d]).join("、")})`).join("\n")}`
+      ? `\n已有的周期习惯（避免重复）：\n${existing.map((r) => `- ${r.title}`).join("\n")}`
       : "";
 
-    const systemPrompt = [
-      "你是一个生活习惯分析助手。请根据用户的成员档案描述，提取出可以转化为周期性计划的生活习惯。",
+    const summaryPrompt = [
+      "根据以上对话内容，请生成两部分内容：",
       "",
-      "输出要求：返回一个 JSON 数组，每个元素为一个习惯对象，格式如下：",
-      "```json",
+      "## 第一部分：成员档案",
+      "用自然语言总结这位成员的个人信息和生活习惯，用 Markdown 格式书写，包含但不限于：",
+      "- 基本作息",
+      "- 工作/学习情况",
+      "- 运动健身",
+      "- 饮食习惯",
+      "- 周末安排",
+      "- 其他特点",
+      "",
+      "## 第二部分：周期习惯 JSON",
+      "从对话中提取可以设置为周期性计划的习惯，输出一个 JSON 数组。",
+      "格式：",
+      '```json',
       '[{ "title": "习惯名称", "weekdays": [1,3,5], "timeSlot": "morning|afternoon|evening", "time": "18:30", "reminders": [{ "offsetMinutes": 30, "message": "提醒内容", "channel": "wechat" }] }]',
-      "```",
+      '```',
       "",
-      "字段说明：",
-      "- title: 简短的习惯标题",
-      "- weekdays: 0-6 的数组，0=周日，1=周一...6=周六",
-      "- timeSlot: 可选，morning/afternoon/evening",
-      "- time: 可选，精确时间如 18:30",
-      "- reminders: 可选数组，offsetMinutes 为提前提醒的分钟数，message 为提醒内容，channel 为 wechat/dashboard/both",
-      "",
-      "规则：",
-      "- 只提取明确描述的周期性习惯，不要凭空推测",
-      "- 如果描述模糊（如「经常运动」），可以合理推断但标注 timeSlot 而非精确时间",
-      "- 提醒消息要具体实用（如「记得带健身装备」而非「健身提醒」）",
-      "- 只输出 JSON 数组，不要任何其他文字",
+      "字段说明：weekdays 用 0-6 表示（0=周日），timeSlot 可选，time 可选（精确时间），reminders 可选。",
+      "只提取用户明确提到的周期性习惯，不要凭空推测。",
+      "提醒消息要具体实用。",
       existingDesc,
+      "",
+      "请严格按照以下格式输出（不要有其他内容）：",
+      "---PROFILE_START---",
+      "（档案内容）",
+      "---PROFILE_END---",
+      "---ROUTINES_START---",
+      "（JSON 数组）",
+      "---ROUTINES_END---",
     ].join("\n");
 
-    try {
-      const provider = this.getProvider();
-      const result = await provider.chat({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `以下是成员档案：\n\n${profile}` },
-        ],
-        maxTokens: 2000,
-      });
+    const summaryMessages = [
+      ...messages,
+      { role: "user" as const, content: summaryPrompt },
+    ];
 
-      const text = result.message.content.trim();
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) return [];
+    const provider = this.getProvider();
+    const result = await provider.chat({ messages: summaryMessages, maxTokens: 3000 });
+    this.logProviderUsage(memberId, result.usage);
+    const text = result.message.content;
 
-      const parsed = JSON.parse(jsonMatch[0]) as Array<{
-        title: string;
-        weekdays: number[];
-        timeSlot?: string;
-        time?: string;
-        reminders?: Array<{ offsetMinutes: number; message: string; channel: string }>;
-      }>;
+    // Parse profile
+    const profileMatch = text.match(/---PROFILE_START---([\s\S]*?)---PROFILE_END---/);
+    const profile = profileMatch ? profileMatch[1]!.trim() : "";
 
-      return parsed.map((item) => ({
-        id: "",
-        title: item.title,
-        weekdays: item.weekdays,
-        timeSlot: item.timeSlot as Routine["timeSlot"],
-        time: item.time,
-        reminders: (item.reminders ?? []).map((r) => ({
-          offsetMinutes: r.offsetMinutes,
-          message: r.message,
-          channel: (r.channel as "wechat" | "dashboard" | "both") ?? "wechat",
-        })),
-      }));
-    } catch (err) {
-      console.error("[Butler] 生成周期习惯失败:", err);
-      return [];
+    // Parse routines
+    const routinesMatch = text.match(/---ROUTINES_START---([\s\S]*?)---ROUTINES_END---/);
+    let routines: Routine[] = [];
+    if (routinesMatch) {
+      const jsonMatch = routinesMatch[1]!.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]) as Array<{
+            title: string;
+            weekdays: number[];
+            timeSlot?: string;
+            time?: string;
+            reminders?: Array<{ offsetMinutes: number; message: string; channel: string }>;
+          }>;
+          routines = parsed.map((item) => ({
+            id: "",
+            title: item.title,
+            weekdays: item.weekdays,
+            timeSlot: item.timeSlot as Routine["timeSlot"],
+            time: item.time,
+            reminders: (item.reminders ?? []).map((r) => ({
+              offsetMinutes: r.offsetMinutes,
+              message: r.message,
+              channel: (r.channel as "wechat" | "dashboard" | "both") ?? "wechat",
+            })),
+          }));
+        } catch { /* ignore parse error */ }
+      }
     }
+
+    this.interviewSessions.delete(memberId);
+    return { profile, routines };
+  }
+
+  cancelInterview(memberId: string): void {
+    this.interviewSessions.delete(memberId);
+  }
+
+  hasActiveInterview(memberId: string): boolean {
+    return this.interviewSessions.has(memberId);
   }
 
   applyRoutines(memberId: string, routines: Routine[]): void {

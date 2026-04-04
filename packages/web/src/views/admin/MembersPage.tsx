@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
@@ -49,11 +49,19 @@ export function MembersPage() {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [suggestedRoutines, setSuggestedRoutines] = useState<Routine[]>([]);
+
+  // Interview chat state
+  const [interviewing, setInterviewing] = useState(false);
+  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Interview result preview
+  const [interviewResult, setInterviewResult] = useState<{ profile: string; routines: Routine[] } | null>(null);
   const [selectedRoutineIdx, setSelectedRoutineIdx] = useState<Set<number>>(new Set());
-  const [showRoutinePreview, setShowRoutinePreview] = useState(false);
-  const [applyingRoutines, setApplyingRoutines] = useState(false);
+  const [applyingResult, setApplyingResult] = useState(false);
 
   useEffect(() => {
     loadMembers();
@@ -101,25 +109,67 @@ export function MembersPage() {
     setSaving(false);
   }
 
-  async function generateRoutines() {
+  async function startInterview() {
     if (!selectedId) return;
-    setGenerating(true);
+    setChatMessages([]);
+    setChatLoading(true);
+    setInterviewing(true);
+    setInterviewResult(null);
     try {
-      const res = await fetch(`/api/members/${selectedId}/generate-routines`, { method: "POST" });
-      const data = await res.json() as { ok: boolean; routines: Routine[]; error?: string };
-      if (data.ok && data.routines.length > 0) {
-        setSuggestedRoutines(data.routines);
-        setSelectedRoutineIdx(new Set(data.routines.map((_, i) => i)));
-        setShowRoutinePreview(true);
-      } else if (data.routines.length === 0) {
-        alert("未从档案中识别出周期性习惯，请确保档案中有描述日常生活习惯的内容。");
-      } else if (data.error) {
-        alert(`生成失败: ${data.error}`);
+      const res = await fetch(`/api/members/${selectedId}/interview/start`, { method: "POST" });
+      const data = await res.json() as { ok: boolean; reply: string; error?: string };
+      if (data.ok) {
+        setChatMessages([{ role: "assistant", content: data.reply }]);
+      } else {
+        setChatMessages([{ role: "assistant", content: `启动失败：${data.error ?? "未知错误"}` }]);
       }
     } catch {
-      alert("生成失败，请检查 LLM 连接。");
+      setChatMessages([{ role: "assistant", content: "启动失败，请检查 LLM 连接。" }]);
     }
-    setGenerating(false);
+    setChatLoading(false);
+  }
+
+  async function sendChatMessage() {
+    if (!selectedId || !chatInput.trim() || chatLoading) return;
+    const userMsg = chatInput.trim();
+    setChatInput("");
+    setChatMessages((prev) => [...prev, { role: "user", content: userMsg }]);
+    setChatLoading(true);
+    try {
+      const res = await fetch(`/api/members/${selectedId}/interview/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMsg }),
+      });
+      const data = await res.json() as { ok: boolean; reply: string; error?: string };
+      if (data.ok) {
+        setChatMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+      }
+    } catch { /* ignore */ }
+    setChatLoading(false);
+    setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+  }
+
+  async function finishInterview() {
+    if (!selectedId) return;
+    setFinishing(true);
+    try {
+      const res = await fetch(`/api/members/${selectedId}/interview/finish`, { method: "POST" });
+      const data = await res.json() as { ok: boolean; profile: string; routines: Routine[]; error?: string };
+      if (data.ok) {
+        setInterviewResult({ profile: data.profile, routines: data.routines });
+        setSelectedRoutineIdx(new Set(data.routines.map((_, i) => i)));
+      }
+    } catch { /* ignore */ }
+    setFinishing(false);
+  }
+
+  async function cancelInterview() {
+    if (!selectedId) return;
+    await fetch(`/api/members/${selectedId}/interview/cancel`, { method: "POST" });
+    setInterviewing(false);
+    setChatMessages([]);
+    setInterviewResult(null);
   }
 
   function toggleRoutine(idx: number) {
@@ -131,22 +181,31 @@ export function MembersPage() {
     });
   }
 
-  async function applySelectedRoutines() {
-    if (!selectedId) return;
-    setApplyingRoutines(true);
-    const selected = suggestedRoutines.filter((_, i) => selectedRoutineIdx.has(i));
+  async function applyInterviewResult() {
+    if (!selectedId || !interviewResult) return;
+    setApplyingResult(true);
     try {
-      await fetch(`/api/members/${selectedId}/apply-routines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ routines: selected }),
-      });
-      setShowRoutinePreview(false);
-      setSuggestedRoutines([]);
+      if (interviewResult.profile) {
+        await fetch(`/api/members/${selectedId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profile: interviewResult.profile }),
+        });
+      }
+      const selectedRoutines = interviewResult.routines.filter((_, i) => selectedRoutineIdx.has(i));
+      if (selectedRoutines.length > 0) {
+        await fetch(`/api/members/${selectedId}/apply-routines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ routines: selectedRoutines }),
+        });
+      }
+      setInterviewing(false);
+      setChatMessages([]);
+      setInterviewResult(null);
       selectMember(selectedId);
-      setTab("routines");
     } catch { /* ignore */ }
-    setApplyingRoutines(false);
+    setApplyingResult(false);
   }
 
   async function deleteMember(id: string) {
@@ -313,16 +372,13 @@ export function MembersPage() {
                   {detail.routines.length === 0 ? (
                     <div className="py-6 text-center space-y-3">
                       <p className="text-sm text-stone-400">暂无周期习惯</p>
-                      {detail.profile && (
-                        <button
-                          onClick={generateRoutines}
-                          disabled={generating}
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 transition-colors"
-                        >
-                          {generating ? "AI 分析中..." : "从档案生成"}
-                        </button>
-                      )}
-                      <p className="text-xs text-stone-400">也可以通过微信告诉管家你的生活习惯来创建</p>
+                      <button
+                        onClick={() => { setTab("profile"); startInterview(); }}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
+                      >
+                        AI 引导填写
+                      </button>
+                      <p className="text-xs text-stone-400">通过对话让管家了解你的生活习惯，或在微信中直接告诉管家</p>
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -406,75 +462,221 @@ export function MembersPage() {
 
             {/* Profile */}
             {tab === "profile" && (
-              <div className="bg-white rounded-xl border border-stone-200 p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-medium text-stone-500">成员档案</h3>
-                  {!editing ? (
-                    <button
-                      onClick={startEditing}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
-                    >
-                      编辑
-                    </button>
-                  ) : (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setEditing(false)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:bg-stone-100 transition-colors"
-                      >
-                        取消
-                      </button>
-                      <button
-                        onClick={saveProfile}
-                        disabled={saving}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-50 transition-colors"
-                      >
-                        {saving ? "保存中..." : "保存"}
-                      </button>
+              <div className="space-y-4">
+                {/* Interview chat UI */}
+                {interviewing && !interviewResult && (
+                  <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
+                    <div className="flex items-center justify-between p-4 border-b border-stone-100 bg-amber-50/50">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                        <h3 className="text-sm font-medium text-stone-700">AI 引导填写</h3>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={cancelInterview}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:bg-stone-100 transition-colors"
+                        >
+                          取消
+                        </button>
+                        <button
+                          onClick={finishInterview}
+                          disabled={chatMessages.length < 4 || finishing}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                        >
+                          {finishing ? "生成中..." : "完成并生成档案"}
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
 
-                {editing ? (
-                  <textarea
-                    value={editContent}
-                    onChange={(e) => setEditContent(e.target.value)}
-                    className="w-full h-[500px] text-sm text-stone-700 font-mono leading-relaxed bg-stone-50 rounded-lg p-4 border border-stone-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
-                    spellCheck={false}
-                  />
-                ) : (
-                  <pre className="text-sm text-stone-700 whitespace-pre-wrap font-mono leading-relaxed bg-stone-50 rounded-lg p-4 max-h-[600px] overflow-auto">
-                    {detail.profile || "暂无档案，点击「编辑」开始填写"}
-                  </pre>
+                    <div className="h-[400px] overflow-auto p-4 space-y-3 bg-stone-50/50">
+                      {chatMessages.map((msg, i) => (
+                        <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                          <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
+                            msg.role === "user"
+                              ? "bg-amber-500 text-white rounded-br-md"
+                              : "bg-white text-stone-700 border border-stone-200 rounded-bl-md"
+                          }`}>
+                            {msg.content}
+                          </div>
+                        </div>
+                      ))}
+                      {chatLoading && (
+                        <div className="flex justify-start">
+                          <div className="bg-white text-stone-400 border border-stone-200 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">
+                            <span className="inline-flex gap-1">
+                              <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                              <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                              <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      <div ref={chatEndRef} />
+                    </div>
+
+                    <div className="p-3 border-t border-stone-100 bg-white">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={chatInput}
+                          onChange={(e) => setChatInput(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendChatMessage()}
+                          placeholder="输入你的回答..."
+                          disabled={chatLoading}
+                          className="flex-1 px-4 py-2.5 rounded-xl border border-stone-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 disabled:opacity-50"
+                        />
+                        <button
+                          onClick={sendChatMessage}
+                          disabled={!chatInput.trim() || chatLoading}
+                          className="px-4 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                        >
+                          发送
+                        </button>
+                      </div>
+                      <p className="text-xs text-stone-400 mt-2 text-center">
+                        回答完所有问题后，点击上方「完成并生成档案」
+                      </p>
+                    </div>
+                  </div>
                 )}
 
-                {!editing && detail.profile && (
-                  <div className="mt-4 pt-4 border-t border-stone-100">
-                    <button
-                      onClick={generateRoutines}
-                      disabled={generating}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 transition-colors"
-                    >
-                      {generating ? (
-                        <>
-                          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                          </svg>
-                          AI 分析中...
-                        </>
-                      ) : (
-                        <>
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                          </svg>
-                          从档案生成周期习惯
-                        </>
+                {/* Interview result preview */}
+                {interviewResult && (
+                  <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
+                    <div className="p-4 border-b border-stone-100 bg-amber-50/50">
+                      <h3 className="text-sm font-medium text-stone-700">AI 整理结果</h3>
+                      <p className="text-xs text-stone-500 mt-0.5">请检查以下档案和周期习惯，确认后保存</p>
+                    </div>
+
+                    <div className="p-5 space-y-5 max-h-[500px] overflow-auto">
+                      <div>
+                        <h4 className="text-xs font-medium text-stone-500 mb-2">成员档案</h4>
+                        <pre className="text-sm text-stone-700 whitespace-pre-wrap font-mono leading-relaxed bg-stone-50 rounded-lg p-4 border border-stone-100">
+                          {interviewResult.profile || "（未生成档案）"}
+                        </pre>
+                      </div>
+
+                      {interviewResult.routines.length > 0 && (
+                        <div>
+                          <h4 className="text-xs font-medium text-stone-500 mb-2">
+                            识别的周期习惯 · {interviewResult.routines.length} 项
+                          </h4>
+                          <div className="space-y-2">
+                            {interviewResult.routines.map((routine, idx) => (
+                              <label
+                                key={idx}
+                                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                                  selectedRoutineIdx.has(idx)
+                                    ? "border-amber-300 bg-amber-50/50"
+                                    : "border-stone-200 bg-stone-50 opacity-60"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedRoutineIdx.has(idx)}
+                                  onChange={() => toggleRoutine(idx)}
+                                  className="mt-0.5 rounded border-stone-300 text-amber-500 focus:ring-amber-500/20"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-stone-800">{routine.title}</p>
+                                  <div className="flex items-center gap-3 mt-1">
+                                    <div className="flex gap-0.5">
+                                      {[0, 1, 2, 3, 4, 5, 6].map((d) => (
+                                        <span key={d} className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${
+                                          routine.weekdays.includes(d)
+                                            ? "bg-amber-500 text-white font-medium"
+                                            : "bg-stone-200 text-stone-400"
+                                        }`}>{WEEKDAY_NAMES[d]}</span>
+                                      ))}
+                                    </div>
+                                    {routine.time && <span className="text-xs text-stone-500">{routine.time}</span>}
+                                    {routine.timeSlot && <span className="text-xs text-stone-400">{formatTimeSlot(routine.timeSlot)}</span>}
+                                  </div>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
                       )}
-                    </button>
-                    <p className="text-xs text-stone-400 mt-1.5">
-                      AI 将分析档案中描述的生活习惯，自动创建周期计划
-                    </p>
+                    </div>
+
+                    <div className="p-4 border-t border-stone-100 flex justify-between">
+                      <button
+                        onClick={() => { setInterviewResult(null); }}
+                        className="px-4 py-2 rounded-lg text-sm text-stone-500 hover:bg-stone-100 transition-colors"
+                      >
+                        返回继续对话
+                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={cancelInterview}
+                          className="px-4 py-2 rounded-lg text-sm text-stone-500 hover:bg-stone-100 transition-colors"
+                        >
+                          放弃
+                        </button>
+                        <button
+                          onClick={applyInterviewResult}
+                          disabled={applyingResult}
+                          className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                        >
+                          {applyingResult ? "保存中..." : "确认保存"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Normal profile view (when not interviewing) */}
+                {!interviewing && (
+                  <div className="bg-white rounded-xl border border-stone-200 p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-medium text-stone-500">成员档案</h3>
+                      {!editing ? (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={startInterview}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
+                          >
+                            AI 引导填写
+                          </button>
+                          <button
+                            onClick={startEditing}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:bg-stone-100 transition-colors"
+                          >
+                            手动编辑
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setEditing(false)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:bg-stone-100 transition-colors"
+                          >
+                            取消
+                          </button>
+                          <button
+                            onClick={saveProfile}
+                            disabled={saving}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                          >
+                            {saving ? "保存中..." : "保存"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {editing ? (
+                      <textarea
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        className="w-full h-[500px] text-sm text-stone-700 font-mono leading-relaxed bg-stone-50 rounded-lg p-4 border border-stone-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
+                        spellCheck={false}
+                      />
+                    ) : (
+                      <pre className="text-sm text-stone-700 whitespace-pre-wrap font-mono leading-relaxed bg-stone-50 rounded-lg p-4 max-h-[600px] overflow-auto">
+                        {detail.profile || "暂无档案，点击「AI 引导填写」让管家帮你完善"}
+                      </pre>
+                    )}
                   </div>
                 )}
               </div>
@@ -482,100 +684,6 @@ export function MembersPage() {
           </div>
         )}
       </div>
-
-      {/* Routine preview dialog */}
-      {showRoutinePreview && suggestedRoutines.length > 0 && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowRoutinePreview(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6 border-b border-stone-100">
-              <h3 className="text-lg font-semibold text-stone-800">AI 识别的周期习惯</h3>
-              <p className="text-sm text-stone-500 mt-1">
-                共识别 {suggestedRoutines.length} 项习惯，请选择要添加的内容
-              </p>
-            </div>
-
-            <div className="flex-1 overflow-auto p-6 space-y-3">
-              {suggestedRoutines.map((routine, idx) => (
-                <label
-                  key={idx}
-                  className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
-                    selectedRoutineIdx.has(idx)
-                      ? "border-amber-300 bg-amber-50/50"
-                      : "border-stone-200 bg-stone-50 opacity-60"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedRoutineIdx.has(idx)}
-                    onChange={() => toggleRoutine(idx)}
-                    className="mt-0.5 rounded border-stone-300 text-amber-500 focus:ring-amber-500/20"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-stone-800">{routine.title}</p>
-                    <div className="flex items-center gap-3 mt-1.5">
-                      <div className="flex gap-1">
-                        {[0, 1, 2, 3, 4, 5, 6].map((d) => (
-                          <span
-                            key={d}
-                            className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${
-                              routine.weekdays.includes(d)
-                                ? "bg-amber-500 text-white font-medium"
-                                : "bg-stone-200 text-stone-400"
-                            }`}
-                          >
-                            {WEEKDAY_NAMES[d]}
-                          </span>
-                        ))}
-                      </div>
-                      {routine.time && <span className="text-xs text-stone-500">{routine.time}</span>}
-                      {routine.timeSlot && <span className="text-xs text-stone-400">{formatTimeSlot(routine.timeSlot)}</span>}
-                    </div>
-                    {routine.reminders.length > 0 && (
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {routine.reminders.map((r, i) => (
-                          <span key={i} className="text-[11px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
-                            ⏰ {r.offsetMinutes > 0 ? `提前${r.offsetMinutes}分钟` : "到时"}{r.message ? `: ${r.message}` : ""}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </label>
-              ))}
-            </div>
-
-            <div className="p-6 border-t border-stone-100 flex items-center justify-between">
-              <button
-                onClick={() => {
-                  if (selectedRoutineIdx.size === suggestedRoutines.length) {
-                    setSelectedRoutineIdx(new Set());
-                  } else {
-                    setSelectedRoutineIdx(new Set(suggestedRoutines.map((_, i) => i)));
-                  }
-                }}
-                className="text-sm text-stone-500 hover:text-stone-700 transition-colors"
-              >
-                {selectedRoutineIdx.size === suggestedRoutines.length ? "取消全选" : "全选"}
-              </button>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowRoutinePreview(false)}
-                  className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={applySelectedRoutines}
-                  disabled={selectedRoutineIdx.size === 0 || applyingRoutines}
-                  className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
-                >
-                  {applyingRoutines ? "添加中..." : `添加 ${selectedRoutineIdx.size} 项习惯`}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Delete confirmation dialog */}
       {deleting && (

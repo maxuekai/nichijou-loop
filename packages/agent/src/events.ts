@@ -1,11 +1,11 @@
-import type { LLMProvider } from "@nichijou/ai";
+import type { LLMProvider, Usage } from "@nichijou/ai";
 import type { Message, ToolDefinition } from "@nichijou/shared";
 
 export type AgentEvent =
   | { type: "text_delta"; delta: string }
   | { type: "tool_start"; toolName: string; params: unknown }
   | { type: "tool_end"; toolName: string; result: string; isError: boolean }
-  | { type: "turn_end"; message: Message }
+  | { type: "turn_end"; message: Message; usage: Usage }
   | { type: "agent_end" }
   | { type: "error"; error: Error };
 

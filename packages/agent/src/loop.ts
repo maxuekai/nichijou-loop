@@ -1,4 +1,4 @@
-import type { LLMProvider, StreamEvent } from "@nichijou/ai";
+import type { LLMProvider, StreamEvent, Usage } from "@nichijou/ai";
 import type { Message, ToolDefinition } from "@nichijou/shared";
 import type { AgentEvent } from "./events.js";
 import { ToolRunner } from "./tool-runner.js";
@@ -34,6 +34,7 @@ export class AgentLoop {
     while (turns < this.maxTurns) {
       turns++;
       let assistantMessage: Message | undefined;
+      let turnUsage: Usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
       const stream = this.provider.chatStream({
         messages,
@@ -47,6 +48,7 @@ export class AgentLoop {
           yield { type: "text_delta", delta: event.delta };
         } else if (event.type === "done") {
           assistantMessage = event.message;
+          turnUsage = event.usage;
         } else if (event.type === "error") {
           yield { type: "error", error: event.error };
           return;
@@ -59,7 +61,7 @@ export class AgentLoop {
       }
 
       messages.push(assistantMessage);
-      yield { type: "turn_end", message: assistantMessage };
+      yield { type: "turn_end", message: assistantMessage, usage: turnUsage };
 
       if (!assistantMessage.toolCalls || assistantMessage.toolCalls.length === 0) {
         break;

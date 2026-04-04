@@ -136,15 +136,47 @@ export class NichijouServer {
         return;
       }
 
-      if (path.match(/^\/api\/members\/[^/]+\/generate-routines$/) && method === "POST") {
+      if (path.match(/^\/api\/members\/[^/]+\/interview\/start$/) && method === "POST") {
         const memberId = path.split("/")[3]!;
         try {
-          const routines = await this.butler.generateRoutinesFromProfile(memberId);
-          this.json(res, { ok: true, routines });
+          const reply = await this.butler.startInterview(memberId);
+          this.json(res, { ok: true, reply });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          this.json(res, { ok: false, error: msg, routines: [] });
+          this.json(res, { ok: false, error: msg });
         }
+        return;
+      }
+
+      if (path.match(/^\/api\/members\/[^/]+\/interview\/chat$/) && method === "POST") {
+        const memberId = path.split("/")[3]!;
+        const body = await this.readBody(req) as { message: string };
+        try {
+          const reply = await this.butler.interviewChat(memberId, body.message);
+          this.json(res, { ok: true, reply });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.json(res, { ok: false, error: msg });
+        }
+        return;
+      }
+
+      if (path.match(/^\/api\/members\/[^/]+\/interview\/finish$/) && method === "POST") {
+        const memberId = path.split("/")[3]!;
+        try {
+          const result = await this.butler.finishInterview(memberId);
+          this.json(res, { ok: true, ...result });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.json(res, { ok: false, error: msg });
+        }
+        return;
+      }
+
+      if (path.match(/^\/api\/members\/[^/]+\/interview\/cancel$/) && method === "POST") {
+        const memberId = path.split("/")[3]!;
+        this.butler.cancelInterview(memberId);
+        this.json(res, { ok: true });
         return;
       }
 
