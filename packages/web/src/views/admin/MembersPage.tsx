@@ -3,6 +3,25 @@ import { api } from "../../api";
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
 
+interface RoutineAction {
+  id: string;
+  type: "notify" | "plugin" | "ai_task";
+  trigger: "before" | "at" | "after";
+  offsetMinutes: number;
+  channel?: string;
+  message?: string;
+  toolName?: string;
+  toolParams?: Record<string, unknown>;
+  prompt?: string;
+}
+
+interface PluginToolInfo {
+  pluginId: string;
+  pluginName: string;
+  toolName: string;
+  description: string;
+}
+
 interface Routine {
   id: string;
   title: string;
@@ -10,6 +29,7 @@ interface Routine {
   timeSlot?: string;
   time?: string;
   reminders: Array<{ offsetMinutes: number; message: string; channel: string }>;
+  actions?: RoutineAction[];
 }
 
 interface Override {
@@ -66,6 +86,7 @@ export function MembersPage() {
   // Routine editing
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
   const [deletingRoutine, setDeletingRoutine] = useState<string | null>(null);
+  const [pluginTools, setPluginTools] = useState<PluginToolInfo[]>([]);
 
   // Generate routines from profile
   const [generating, setGenerating] = useState(false);
@@ -75,6 +96,7 @@ export function MembersPage() {
 
   useEffect(() => {
     loadMembers();
+    api.getPluginTools().then(setPluginTools).catch(() => {});
   }, []);
 
   async function loadMembers() {
@@ -437,12 +459,28 @@ export function MembersPage() {
                     <h3 className="text-sm font-medium text-stone-500">
                       7 days · {detail.routines.length} 项习惯
                     </h3>
-                    <button
-                      onClick={() => { setTab("profile"); startInterview(); }}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
-                    >
-                      AI 引导填写
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setEditingRoutine({
+                            id: `rtn_${Date.now().toString(36)}`,
+                            title: "",
+                            weekdays: [],
+                            reminders: [],
+                            actions: [],
+                          });
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 transition-colors cursor-pointer"
+                      >
+                        + 新增习惯
+                      </button>
+                      <button
+                        onClick={() => { setTab("profile"); startInterview(); }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
+                      >
+                        AI 引导填写
+                      </button>
+                    </div>
                   </div>
 
                   {detail.routines.length === 0 ? (
@@ -484,8 +522,21 @@ export function MembersPage() {
                             </div>
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
-                                onClick={() => setEditingRoutine({ ...routine })}
-                                className="p-1.5 rounded-md text-stone-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                                onClick={() => {
+                                  const r = { ...routine };
+                                  if (!r.actions?.length && r.reminders.length > 0) {
+                                    r.actions = r.reminders.map((rem, i) => ({
+                                      id: `act_migrated_${i}`,
+                                      type: "notify" as const,
+                                      trigger: "before" as const,
+                                      offsetMinutes: rem.offsetMinutes,
+                                      channel: rem.channel,
+                                      message: rem.message,
+                                    }));
+                                  }
+                                  setEditingRoutine(r);
+                                }}
+                                className="p-1.5 rounded-md text-stone-400 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
                                 title="编辑"
                               >
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -504,11 +555,29 @@ export function MembersPage() {
                             </div>
                           </div>
 
-                          {routine.reminders.length > 0 && (
+                          {((routine.actions ?? []).length > 0 || routine.reminders.length > 0) && (
                             <div className="mt-2 flex flex-wrap gap-1.5">
-                              {routine.reminders.map((r, i) => (
+                              {(routine.actions ?? []).map((a) => {
+                                const icons: Record<string, string> = { notify: "🔔", plugin: "🔧", ai_task: "🤖" };
+                                const labels: Record<string, string> = { notify: "通知", plugin: "插件", ai_task: "AI" };
+                                const trigLabels: Record<string, string> = { before: "提前", at: "到时", after: "延后" };
+                                const colors: Record<string, string> = {
+                                  notify: "bg-blue-50 text-blue-600",
+                                  plugin: "bg-teal-50 text-teal-600",
+                                  ai_task: "bg-purple-50 text-purple-600",
+                                };
+                                return (
+                                  <span key={a.id} className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded ${colors[a.type] ?? "bg-stone-100 text-stone-600"}`}>
+                                    {icons[a.type]} {trigLabels[a.trigger]}{a.trigger !== "at" ? `${a.offsetMinutes}分` : ""}
+                                    {a.type === "notify" && a.message ? `: ${a.message}` : ""}
+                                    {a.type === "plugin" && a.toolName ? `: ${a.toolName}` : ""}
+                                    {a.type === "ai_task" ? `: ${labels[a.type]}` : ""}
+                                  </span>
+                                );
+                              })}
+                              {!(routine.actions?.length) && routine.reminders.map((r, i) => (
                                 <span key={i} className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded">
-                                  ⏰ {r.offsetMinutes > 0 ? `提前${r.offsetMinutes}分钟` : "到时"}
+                                  🔔 {r.offsetMinutes > 0 ? `提前${r.offsetMinutes}分钟` : "到时"}
                                   {r.message ? `: ${r.message}` : ""}
                                 </span>
                               ))}
@@ -924,7 +993,9 @@ export function MembersPage() {
       {editingRoutine && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingRoutine(null)}>
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-stone-800 mb-4">编辑 7 days 习惯</h3>
+            <h3 className="text-lg font-semibold text-stone-800 mb-4">
+              {detail?.routines.some((r) => r.id === editingRoutine.id) ? "编辑 7 days 习惯" : "新增 7 days 习惯"}
+            </h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-stone-500 mb-1">名称</label>
@@ -984,18 +1055,205 @@ export function MembersPage() {
                   />
                 </div>
               </div>
+
+              {/* Actions editor */}
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-2">自动化动作</label>
+                <div className="space-y-2">
+                  {(editingRoutine.actions ?? []).map((action, idx) => {
+                    const typeLabels: Record<string, string> = { notify: "通知", plugin: "插件工具", ai_task: "AI 任务" };
+                    const typeIcons: Record<string, string> = { notify: "🔔", plugin: "🔧", ai_task: "🤖" };
+                    const triggerLabels: Record<string, string> = { before: "提前", at: "到时", after: "延后" };
+                    return (
+                      <div key={action.id} className="p-3 rounded-lg bg-stone-50 border border-stone-100 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-stone-600">
+                            {typeIcons[action.type]} {typeLabels[action.type]}
+                          </span>
+                          <button
+                            onClick={() => {
+                              const actions = (editingRoutine.actions ?? []).filter((_, i) => i !== idx);
+                              setEditingRoutine({ ...editingRoutine, actions });
+                            }}
+                            className="p-1 rounded text-stone-400 hover:text-red-500 hover:bg-red-50 transition-colors cursor-pointer"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={action.trigger}
+                            onChange={(e) => {
+                              const actions = [...(editingRoutine.actions ?? [])];
+                              actions[idx] = { ...actions[idx]!, trigger: e.target.value as RoutineAction["trigger"] };
+                              setEditingRoutine({ ...editingRoutine, actions });
+                            }}
+                            className="px-2 py-1 rounded border border-stone-300 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500/20"
+                          >
+                            <option value="before">提前</option>
+                            <option value="at">到时</option>
+                            <option value="after">延后</option>
+                          </select>
+                          {action.trigger !== "at" && (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={0}
+                                value={action.offsetMinutes}
+                                onChange={(e) => {
+                                  const actions = [...(editingRoutine.actions ?? [])];
+                                  actions[idx] = { ...actions[idx]!, offsetMinutes: parseInt(e.target.value) || 0 };
+                                  setEditingRoutine({ ...editingRoutine, actions });
+                                }}
+                                className="w-16 px-2 py-1 rounded border border-stone-300 text-xs text-center focus:outline-none focus:ring-1 focus:ring-amber-500/20"
+                              />
+                              <span className="text-xs text-stone-400">分钟</span>
+                            </div>
+                          )}
+                          <select
+                            value={action.channel ?? "wechat"}
+                            onChange={(e) => {
+                              const actions = [...(editingRoutine.actions ?? [])];
+                              actions[idx] = { ...actions[idx]!, channel: e.target.value };
+                              setEditingRoutine({ ...editingRoutine, actions });
+                            }}
+                            className="px-2 py-1 rounded border border-stone-300 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500/20"
+                          >
+                            <option value="wechat">微信</option>
+                            <option value="dashboard">面板</option>
+                            <option value="both">两者</option>
+                          </select>
+                        </div>
+                        {action.type === "notify" && (
+                          <input
+                            type="text"
+                            value={action.message ?? ""}
+                            onChange={(e) => {
+                              const actions = [...(editingRoutine.actions ?? [])];
+                              actions[idx] = { ...actions[idx]!, message: e.target.value };
+                              setEditingRoutine({ ...editingRoutine, actions });
+                            }}
+                            placeholder="通知内容"
+                            className="w-full px-2 py-1.5 rounded border border-stone-300 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500/20"
+                          />
+                        )}
+                        {action.type === "plugin" && (
+                          <div className="space-y-1.5">
+                            <select
+                              value={action.toolName ?? ""}
+                              onChange={(e) => {
+                                const actions = [...(editingRoutine.actions ?? [])];
+                                actions[idx] = { ...actions[idx]!, toolName: e.target.value };
+                                setEditingRoutine({ ...editingRoutine, actions });
+                              }}
+                              className="w-full px-2 py-1.5 rounded border border-stone-300 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500/20"
+                            >
+                              <option value="">选择工具...</option>
+                              {pluginTools.map((t) => (
+                                <option key={t.toolName} value={t.toolName}>
+                                  [{t.pluginName}] {t.toolName}
+                                </option>
+                              ))}
+                            </select>
+                            <textarea
+                              value={action.toolParams ? JSON.stringify(action.toolParams, null, 2) : "{}"}
+                              onChange={(e) => {
+                                const actions = [...(editingRoutine.actions ?? [])];
+                                try {
+                                  actions[idx] = { ...actions[idx]!, toolParams: JSON.parse(e.target.value) };
+                                } catch {
+                                  return;
+                                }
+                                setEditingRoutine({ ...editingRoutine, actions });
+                              }}
+                              placeholder='{"key": "value"}'
+                              rows={2}
+                              className="w-full px-2 py-1.5 rounded border border-stone-300 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-amber-500/20 resize-none"
+                            />
+                          </div>
+                        )}
+                        {action.type === "ai_task" && (
+                          <textarea
+                            value={action.prompt ?? ""}
+                            onChange={(e) => {
+                              const actions = [...(editingRoutine.actions ?? [])];
+                              actions[idx] = { ...actions[idx]!, prompt: e.target.value };
+                              setEditingRoutine({ ...editingRoutine, actions });
+                            }}
+                            placeholder="AI 任务描述，如：根据我的习惯推荐明天的穿搭"
+                            rows={2}
+                            className="w-full px-2 py-1.5 rounded border border-stone-300 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500/20 resize-none"
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        const id = `act_${Date.now().toString(36)}`;
+                        setEditingRoutine({
+                          ...editingRoutine,
+                          actions: [...(editingRoutine.actions ?? []), { id, type: "notify", trigger: "before", offsetMinutes: 30, channel: "wechat", message: "" }],
+                        });
+                      }}
+                      className="flex-1 py-1.5 rounded-lg border border-dashed border-stone-300 text-xs text-stone-500 hover:border-amber-400 hover:text-amber-600 transition-colors cursor-pointer"
+                    >
+                      + 通知
+                    </button>
+                    <button
+                      onClick={() => {
+                        const id = `act_${Date.now().toString(36)}`;
+                        setEditingRoutine({
+                          ...editingRoutine,
+                          actions: [...(editingRoutine.actions ?? []), { id, type: "plugin", trigger: "before", offsetMinutes: 30, channel: "wechat", toolName: "" }],
+                        });
+                      }}
+                      className="flex-1 py-1.5 rounded-lg border border-dashed border-stone-300 text-xs text-stone-500 hover:border-blue-400 hover:text-blue-600 transition-colors cursor-pointer"
+                    >
+                      + 插件工具
+                    </button>
+                    <button
+                      onClick={() => {
+                        const id = `act_${Date.now().toString(36)}`;
+                        setEditingRoutine({
+                          ...editingRoutine,
+                          actions: [...(editingRoutine.actions ?? []), { id, type: "ai_task", trigger: "before", offsetMinutes: 30, channel: "wechat", prompt: "" }],
+                        });
+                      }}
+                      className="flex-1 py-1.5 rounded-lg border border-dashed border-stone-300 text-xs text-stone-500 hover:border-purple-400 hover:text-purple-600 transition-colors cursor-pointer"
+                    >
+                      + AI 任务
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
               <button
                 onClick={() => setEditingRoutine(null)}
-                className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors"
+                className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors cursor-pointer"
               >
                 取消
               </button>
               <button
-                onClick={() => saveRoutine(editingRoutine)}
-                className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors"
+                onClick={() => {
+                  const toSave = { ...editingRoutine };
+                  if (toSave.actions?.length) {
+                    toSave.reminders = toSave.actions
+                      .filter((a) => a.type === "notify")
+                      .map((a) => ({
+                        offsetMinutes: a.trigger === "before" ? a.offsetMinutes : 0,
+                        message: a.message ?? "",
+                        channel: a.channel ?? "wechat",
+                      }));
+                  }
+                  saveRoutine(toSave);
+                }}
+                className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors cursor-pointer"
               >
                 保存
               </button>

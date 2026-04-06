@@ -10,6 +10,8 @@ import { StatusPage } from "./views/admin/StatusPage";
 import { ChatPage } from "./views/admin/ChatPage";
 import { WeChatPage } from "./views/admin/WeChatPage";
 import { LogsPage } from "./views/admin/LogsPage";
+import { RemindersPage } from "./views/admin/RemindersPage";
+import { PluginsPage } from "./views/admin/PluginsPage";
 import { BoardView } from "./views/board/BoardView";
 
 export function App() {
@@ -43,6 +45,8 @@ export function App() {
         <Route path="chat" element={<ChatPage />} />
         <Route path="wechat" element={<WeChatPage />} />
         <Route path="logs" element={<LogsPage />} />
+        <Route path="reminders" element={<RemindersPage />} />
+        <Route path="plugins" element={<PluginsPage />} />
       </Route>
       <Route path="*" element={<Navigate to={setupDone ? "/admin" : "/setup"} replace />} />
     </Routes>

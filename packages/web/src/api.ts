@@ -89,4 +89,40 @@ export const api = {
       }>;
       soul: string;
     }>("/board/data"),
+
+  // --- Reminders ---
+
+  getReminders: (memberId?: string) =>
+    request<Array<{ id: string; memberId: string; message: string; triggerAt: string; channel: string; done: boolean; createdAt: string }>>(
+      memberId ? `/reminders?memberId=${memberId}` : "/reminders",
+    ),
+
+  createReminder: (data: { memberId: string; message: string; triggerAt: string; channel?: string }) =>
+    request<{ id: string }>("/reminders", { method: "POST", body: JSON.stringify(data) }),
+
+  updateReminder: (id: string, data: { message?: string; triggerAt?: string; channel?: string }) =>
+    request<{ ok: boolean }>(`/reminders/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+
+  deleteReminder: (id: string) =>
+    request<{ ok: boolean }>(`/reminders/${id}`, { method: "DELETE" }),
+
+  // --- Plugins ---
+
+  getPluginTools: () =>
+    request<Array<{ pluginId: string; pluginName: string; toolName: string; description: string }>>("/plugins/tools"),
+
+  getPlugins: () =>
+    request<Array<{
+      id: string;
+      name: string;
+      description: string;
+      version: string;
+      enabled: boolean;
+      tools: Array<{ name: string; description: string }>;
+    }>>("/plugins"),
+
+  // --- Geo ---
+
+  detectLocation: () =>
+    request<{ lat: string; lon: string; name: string; error?: string }>("/geo/detect"),
 };

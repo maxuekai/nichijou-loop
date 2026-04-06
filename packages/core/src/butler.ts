@@ -16,6 +16,10 @@ import { createFamilyTools } from "./tools/family-tools.js";
 import { createRoutineTools } from "./tools/routine-tools.js";
 import { createMemoryTools } from "./tools/memory-tools.js";
 import { createReminderTools } from "./tools/reminder-tools.js";
+import { ReminderScheduler } from "./reminder/reminder-scheduler.js";
+import { PluginHost } from "./plugin-host/plugin-host.js";
+import { resolvePluginImportUrl } from "./plugins/resolve-plugin.js";
+import { ActionExecutor } from "./routine/action-executor.js";
 
 interface WeChatConnection {
   connectionId: string;
@@ -45,6 +49,10 @@ export class ButlerService {
   readonly routineEngine: RoutineEngine;
   readonly gateway: Gateway;
 
+  readonly reminderScheduler: ReminderScheduler;
+  readonly pluginHost: PluginHost;
+  readonly actionExecutor: ActionExecutor;
+
   private provider: LLMProvider | null = null;
   private sessions = new Map<string, AgentSession>();
   private _wechatChannel: WeChatChannelLike | null = null;
@@ -57,9 +65,42 @@ export class ButlerService {
     this.familyManager = new FamilyManager(this.storage);
     this.routineEngine = new RoutineEngine(this.storage);
     this.gateway = new Gateway(this.familyManager);
+    this.reminderScheduler = new ReminderScheduler(this.db, this.gateway);
+    this.pluginHost = new PluginHost(this.storage);
+    this.actionExecutor = new ActionExecutor(
+      this.routineEngine, this.familyManager, this.pluginHost,
+      this.gateway, null, this.db, this.config,
+    );
 
     this.gateway.onMessage(this.handleMessage.bind(this));
     this.gateway.onUnboundMessage(this.handleUnboundMessage.bind(this));
+  }
+
+  /** 仅加载 `~/.nichijou/config.yaml` 中 `plugins` 列出的包（安装目录 ~/.nichijou/plugins） */
+  async registerPlugins(): Promise<void> {
+    const pluginsDir = this.storage.resolve("plugins");
+    const specs = this.config.get().plugins ?? [];
+    if (specs.length === 0) {
+      console.log(
+        "[Plugin] 未配置插件。在 ~/.nichijou/config.yaml 设置 plugins: [\"@nichijou/plugin-weather\"] 或执行 nichijou plugin install <包名>",
+      );
+      return;
+    }
+    for (const spec of specs) {
+      try {
+        const url = resolvePluginImportUrl(spec, pluginsDir);
+        const mod = await import(url) as { default: { id: string; name: string; description: string; version: string; tools: ToolDefinition[] } };
+        this.pluginHost.register(mod.default);
+      } catch (err) {
+        console.warn(`[Plugin] 加载失败 ${spec}:`, err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
+  /** 配置变更后重新加载插件（如管理后台保存 config） */
+  async reloadPlugins(): Promise<void> {
+    this.pluginHost.clear();
+    await this.registerPlugins();
   }
 
   async initWeChatChannel(): Promise<void> {
@@ -87,6 +128,7 @@ export class ButlerService {
     if (!this.provider) {
       const cfg = this.config.get();
       this.provider = createProvider(cfg.llm);
+      this.actionExecutor.setProvider(this.provider);
     }
     return this.provider;
   }
@@ -101,13 +143,21 @@ export class ButlerService {
       ...createFamilyTools(this.familyManager, this.storage),
       ...createRoutineTools(this.routineEngine, this.familyManager),
       ...createMemoryTools(this.storage),
-      ...createReminderTools(this.gateway),
+      ...createReminderTools(this.reminderScheduler),
+      ...this.pluginHost.getAllTools(),
     ];
   }
 
   private buildSystemPrompt(member?: FamilyMember, isOnboarding = false): string {
     const soul = this.storage.readSoul();
     let prompt = soul + "\n\n---\n\n";
+
+    const now = new Date();
+    const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+    prompt += `# 当前时间\n\n`;
+    prompt += `现在是 ${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 `;
+    prompt += `星期${weekdays[now.getDay()]} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}\n`;
+    prompt += `请根据此时间推算用户描述中涉及的具体日期时间。\n\n---\n\n`;
 
     if (member) {
       const profile = this.storage.readMemberProfile(member.id);
@@ -557,6 +607,10 @@ export class ButlerService {
       "- 在对话过程中可以简短确认你听到的信息",
     ].join("\n");
 
+    const now = new Date();
+    const wds = ["日", "一", "二", "三", "四", "五", "六"];
+    prompt += `\n\n# 当前时间\n现在是 ${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 星期${wds[now.getDay()]} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
     if (member) {
       prompt += `\n\n当前成员：${member.name}`;
     }
@@ -774,6 +828,8 @@ export class ButlerService {
   }
 
   async shutdown(): Promise<void> {
+    this.actionExecutor.stop();
+    this.reminderScheduler.shutdown();
     await this.gateway.stopAll();
     this.db.close();
   }

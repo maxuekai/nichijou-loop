@@ -56,6 +56,18 @@ export interface FamilyMember {
 
 /** Routine types */
 
+export interface RoutineAction {
+  id: string;
+  type: "notify" | "plugin" | "ai_task";
+  trigger: "before" | "at" | "after";
+  offsetMinutes: number;
+  channel?: "wechat" | "dashboard" | "both";
+  message?: string;
+  toolName?: string;
+  toolParams?: Record<string, unknown>;
+  prompt?: string;
+}
+
 export interface Routine {
   id: string;
   title: string;
@@ -63,6 +75,7 @@ export interface Routine {
   timeSlot?: "morning" | "afternoon" | "evening";
   time?: string;
   reminders: ReminderRule[];
+  actions?: RoutineAction[];
   pluginId?: string;
   pluginConfig?: Record<string, unknown>;
   since?: string;
@@ -118,6 +131,18 @@ export interface OutboundMessage {
   memberId: string;
   text: string;
   media?: MediaItem[];
+}
+
+/** Reminder (独立提醒事项，持久化到 SQLite) */
+
+export interface Reminder {
+  id: string;
+  memberId: string;
+  message: string;
+  triggerAt: string;
+  channel: "wechat" | "dashboard" | "both";
+  done: boolean;
+  createdAt: string;
 }
 
 /** Channel status */

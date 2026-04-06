@@ -1,5 +1,6 @@
 import BetterSqlite3 from "better-sqlite3";
 import type { StorageManager } from "../storage/storage.js";
+import type { Reminder } from "@nichijou/shared";
 
 export interface ChatRecord {
   id: number;
@@ -91,6 +92,32 @@ export class Database {
 
       CREATE INDEX IF NOT EXISTS idx_conv_log_member
         ON conversation_logs(member_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS reminders (
+        id TEXT PRIMARY KEY,
+        member_id TEXT NOT NULL,
+        message TEXT NOT NULL,
+        trigger_at TEXT NOT NULL,
+        channel TEXT NOT NULL DEFAULT 'wechat',
+        done INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_reminders_member
+        ON reminders(member_id, trigger_at);
+
+      CREATE TABLE IF NOT EXISTS action_execution_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        member_id TEXT NOT NULL,
+        routine_id TEXT NOT NULL,
+        action_id TEXT NOT NULL,
+        executed_at TEXT NOT NULL DEFAULT (datetime('now')),
+        result TEXT,
+        success INTEGER NOT NULL DEFAULT 1
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_action_exec
+        ON action_execution_log(member_id, routine_id, action_id, executed_at);
     `);
   }
 
@@ -215,6 +242,66 @@ export class Database {
         events: string;
         createdAt: string;
       }>;
+  }
+
+  // --- Reminders ---
+
+  createReminder(reminder: Omit<Reminder, "createdAt">): void {
+    this.db
+      .prepare(
+        `INSERT INTO reminders (id, member_id, message, trigger_at, channel, done) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(reminder.id, reminder.memberId, reminder.message, reminder.triggerAt, reminder.channel, reminder.done ? 1 : 0);
+  }
+
+  getReminders(memberId?: string): Reminder[] {
+    const sql = memberId
+      ? `SELECT id, member_id as memberId, message, trigger_at as triggerAt, channel, done, created_at as createdAt FROM reminders WHERE member_id = ? ORDER BY trigger_at ASC`
+      : `SELECT id, member_id as memberId, message, trigger_at as triggerAt, channel, done, created_at as createdAt FROM reminders ORDER BY trigger_at ASC`;
+    const rows = memberId ? this.db.prepare(sql).all(memberId) : this.db.prepare(sql).all();
+    return (rows as Array<Omit<Reminder, "done"> & { done: number }>).map((r) => ({ ...r, done: !!r.done }));
+  }
+
+  getPendingReminders(): Reminder[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, member_id as memberId, message, trigger_at as triggerAt, channel, done, created_at as createdAt
+         FROM reminders WHERE done = 0 ORDER BY trigger_at ASC`,
+      )
+      .all() as Array<Omit<Reminder, "done"> & { done: number }>;
+    return rows.map((r) => ({ ...r, done: false }));
+  }
+
+  markReminderDone(id: string): void {
+    this.db.prepare(`UPDATE reminders SET done = 1 WHERE id = ?`).run(id);
+  }
+
+  updateReminder(id: string, patch: { message?: string; triggerAt?: string; channel?: string }): void {
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    if (patch.message !== undefined) { fields.push("message = ?"); values.push(patch.message); }
+    if (patch.triggerAt !== undefined) { fields.push("trigger_at = ?"); values.push(patch.triggerAt); }
+    if (patch.channel !== undefined) { fields.push("channel = ?"); values.push(patch.channel); }
+    if (fields.length === 0) return;
+    values.push(id);
+    this.db.prepare(`UPDATE reminders SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+  }
+
+  deleteReminder(id: string): void {
+    this.db.prepare(`DELETE FROM reminders WHERE id = ?`).run(id);
+  }
+
+  logActionExecution(memberId: string, routineId: string, actionId: string, result: string, success: boolean): void {
+    this.db.prepare(
+      `INSERT INTO action_execution_log (member_id, routine_id, action_id, result, success) VALUES (?, ?, ?, ?, ?)`,
+    ).run(memberId, routineId, actionId, result, success ? 1 : 0);
+  }
+
+  wasActionExecutedAt(routineId: string, actionId: string, minuteKey: string): boolean {
+    const row = this.db.prepare(
+      `SELECT 1 FROM action_execution_log WHERE routine_id = ? AND action_id = ? AND executed_at LIKE ? LIMIT 1`,
+    ).get(routineId, actionId, `${minuteKey}%`) as unknown;
+    return !!row;
   }
 
   cleanOldChats(daysToKeep = 30): number {

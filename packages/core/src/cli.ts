@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import * as readline from "node:readline";
 import yaml from "js-yaml";
+import { normalizePluginSpec, resolvePluginImportUrl } from "./plugins/resolve-plugin.js";
 
 const DATA_DIR = join(homedir(), ".nichijou");
 const PID_FILE = join(DATA_DIR, "nichijou.pid");
@@ -82,6 +83,7 @@ if (command === "__serve__") {
     dev: cmdDev,
     repl: cmdRepl,
     logs: cmdLogs,
+    plugin: cmdPlugin,
     help: cmdHelp,
     version: cmdVersion,
   };
@@ -108,25 +110,29 @@ function cmdHelp(): void {
 用法: nichijou <command>
 
 命令:
-  start          后台启动管家服务
-  stop           停止管家服务
-  restart        重启管家服务
-  status         查看服务状态
-  dev            前台启动（开发模式，日志直接输出）
-  repl           交互式对话模式
-  logs           查看运行日志
-  help           显示此帮助
-  version        显示版本号
+  start                  后台启动管家服务
+  stop                   停止管家服务
+  restart                重启管家服务
+  status                 查看服务状态
+  dev                    前台启动（开发模式，日志直接输出）
+  repl                   交互式对话模式
+  logs                   查看运行日志
+  plugin list            查看 config 中的 plugins 与本地解析状态
+  plugin install <pkg>   安装到 ~/.nichijou/plugins 并写入 plugins
+  plugin remove <pkg>    从配置移除并 npm uninstall
+  help                   显示此帮助
+  version                显示版本号
 
 选项:
-  --port <port>  指定端口号（默认 3000）
+  --port <port>          指定端口号（默认 3000）
 
 示例:
-  nichijou start            # 后台启动
-  nichijou start --port 8080 # 指定端口启动
-  nichijou dev              # 前台启动
-  nichijou logs             # 查看最近日志
-  nichijou status           # 检查运行状态
+  nichijou start                        # 后台启动
+  nichijou start --port 8080            # 指定端口启动
+  nichijou dev                          # 前台启动
+  nichijou plugin list                  # 查看已安装插件
+  nichijou plugin install @scope/pkg  # 或 file:/绝对路径/插件包
+  nichijou status                       # 检查运行状态
 `);
 }
 
@@ -283,6 +289,146 @@ function cmdLogs(): void {
   }
 }
 
+// ─── Plugin management ──────────────────────────────
+
+async function cmdPlugin(): Promise<void> {
+  const sub = args[1];
+  if (!sub || sub === "list") {
+    await cmdPluginList();
+  } else if (sub === "install") {
+    const pkg = args[2];
+    if (!pkg) {
+      console.error("用法: nichijou plugin install <package-name>");
+      process.exit(1);
+    }
+    await cmdPluginInstall(pkg);
+  } else if (sub === "remove" || sub === "uninstall") {
+    const pkg = args[2];
+    if (!pkg) {
+      console.error("用法: nichijou plugin remove <package-name>");
+      process.exit(1);
+    }
+    await cmdPluginRemove(pkg);
+  } else {
+    console.error(`未知子命令: plugin ${sub}`);
+    console.log("可用子命令: list, install, remove");
+    process.exit(1);
+  }
+}
+
+async function cmdPluginList(): Promise<void> {
+  const configPath = join(DATA_DIR, "config.yaml");
+  const pluginDir = join(DATA_DIR, "plugins");
+
+  console.log("\n📦 插件列表（由 ~/.nichijou/config.yaml 的 plugins 字段决定加载项）\n");
+
+  let configured: string[] = [];
+  if (existsSync(configPath)) {
+    try {
+      const content = readFileSync(configPath, "utf-8");
+      const config = yaml.load(content) as Record<string, unknown>;
+      configured = (config.plugins as string[]) ?? [];
+    } catch { /* ignore */ }
+  }
+
+  if (configured.length === 0) {
+    console.log("当前未配置 plugins，服务启动时不会加载任何插件。\n");
+    console.log("  · 编辑 config.yaml，例如: plugins: [\"@nichijou/plugin-weather\"]");
+    console.log("  · 或执行: nichijou plugin install <包名>（会安装到 ~/.nichijou/plugins 并写入配置）\n");
+  } else {
+    console.log("已配置项（✅ 表示在 ~/.nichijou/plugins 下可解析）:\n");
+    for (const spec of configured) {
+      let mark = "❌";
+      try {
+        resolvePluginImportUrl(spec, pluginDir);
+        mark = "✅";
+      } catch {
+        // 未安装或路径无效
+      }
+      console.log(`  ${mark}  ${spec}`);
+    }
+    console.log("");
+  }
+
+  console.log("命令:");
+  console.log("  nichijou plugin install <pkg>   # npm 包名，或 file:/本地路径/到插件包");
+  console.log("  nichijou plugin remove <pkg>    # 从配置移除并 npm uninstall");
+  console.log("安装或修改配置后需 nichijou restart（或 dev 前台重启）。\n");
+}
+
+async function cmdPluginInstall(pkg: string): Promise<void> {
+  console.log(`📦 安装插件: ${pkg}`);
+
+  const pluginDir = join(DATA_DIR, "plugins");
+  if (!existsSync(pluginDir)) {
+    mkdirSync(pluginDir, { recursive: true });
+  }
+
+  const pkgJsonPath = join(pluginDir, "package.json");
+  if (!existsSync(pkgJsonPath)) {
+    writeFileSync(pkgJsonPath, JSON.stringify({ name: "nichijou-plugins", private: true, type: "module", dependencies: {} }, null, 2));
+  }
+
+  try {
+    console.log("正在下载...");
+    execSync(`npm install ${pkg}`, { cwd: pluginDir, stdio: "pipe", encoding: "utf-8" });
+  } catch (err) {
+    console.error(`安装失败: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+
+  const configPath = join(DATA_DIR, "config.yaml");
+  let config: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      config = (yaml.load(readFileSync(configPath, "utf-8")) as Record<string, unknown>) ?? {};
+    } catch { /* ignore */ }
+  }
+  const plugins = (config.plugins as string[]) ?? [];
+  const nameToStore = normalizePluginSpec(pkg);
+  if (!plugins.includes(nameToStore)) {
+    plugins.push(nameToStore);
+    config.plugins = plugins;
+    writeFileSync(configPath, yaml.dump(config, { lineWidth: 120 }));
+  }
+
+  try {
+    resolvePluginImportUrl(nameToStore, pluginDir);
+  } catch (e) {
+    console.warn("警告: 已写入配置但解析入口失败:", e instanceof Error ? e.message : e);
+  }
+
+  console.log(`✅ 插件 ${pkg} 安装成功`);
+  console.log("需要重启服务以加载新插件: nichijou restart");
+}
+
+async function cmdPluginRemove(pkg: string): Promise<void> {
+  console.log(`📦 移除插件: ${pkg}`);
+
+  const pluginDir = join(DATA_DIR, "plugins");
+  if (existsSync(join(pluginDir, "package.json"))) {
+    try {
+      execSync(`npm uninstall ${pkg}`, { cwd: pluginDir, stdio: "pipe", encoding: "utf-8" });
+    } catch { /* ignore */ }
+  }
+
+  const configPath = join(DATA_DIR, "config.yaml");
+  const norm = normalizePluginSpec(pkg);
+  if (existsSync(configPath)) {
+    try {
+      const config = (yaml.load(readFileSync(configPath, "utf-8")) as Record<string, unknown>) ?? {};
+      const plugins = ((config.plugins as string[]) ?? []).filter(
+        (p) => p !== pkg && normalizePluginSpec(p) !== norm,
+      );
+      config.plugins = plugins;
+      writeFileSync(configPath, yaml.dump(config, { lineWidth: 120 }));
+    } catch { /* ignore */ }
+  }
+
+  console.log(`✅ 插件 ${pkg} 已从配置移除`);
+  console.log("需要重启服务以生效: nichijou restart");
+}
+
 // ─── Foreground / dev mode ──────────────────────────
 
 async function cmdDev(): Promise<void> {
@@ -314,7 +460,10 @@ async function cmdDev(): Promise<void> {
     console.log(`创建了默认家庭「${family.name}」`);
   }
 
+  await butler.registerPlugins();
   await butler.initWeChatChannel();
+  butler.reminderScheduler.start();
+  butler.actionExecutor.start();
 
   const server = new NichijouServer(butler);
   await server.start(port);
@@ -455,7 +604,10 @@ async function serve(): Promise<void> {
     family = butler.familyManager.createFamily("我的家");
   }
 
+  await butler.registerPlugins();
   await butler.initWeChatChannel();
+  butler.reminderScheduler.start();
+  butler.actionExecutor.start();
 
   const server = new NichijouServer(butler);
   await server.start(port);

@@ -143,6 +143,9 @@ export class NichijouServer {
         const body = await this.readBody(req);
         this.butler.config.update(body as Record<string, unknown>);
         this.butler.refreshProvider();
+        if (body && typeof body === "object" && "plugins" in body) {
+          await this.butler.reloadPlugins();
+        }
         this.json(res, { ok: true });
         return;
       }
@@ -477,11 +480,49 @@ export class NichijouServer {
         return;
       }
 
+      // --- Plugins API ---
+      if (path === "/api/plugins" && method === "GET") {
+        const plugins = this.butler.pluginHost.getAllPlugins().map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          version: p.version,
+          enabled: this.butler.pluginHost.isEnabled(p.id),
+          tools: p.tools.map((t) => ({ name: t.name, description: t.description })),
+        }));
+        this.json(res, plugins);
+        return;
+      }
+
+      if (path === "/api/plugins/tools" && method === "GET") {
+        this.json(res, this.butler.pluginHost.getAvailableTools());
+        return;
+      }
+
+      // --- Geo API ---
+      if (path === "/api/geo/detect" && method === "GET") {
+        try {
+          const geoResp = await fetch("https://ipapi.co/json/", {
+            signal: AbortSignal.timeout(8000),
+            headers: { "User-Agent": "NichijouLoop/1.0" },
+          });
+          const geo = await geoResp.json() as { latitude?: number; longitude?: number; city?: string; region?: string; country_name?: string };
+          const lat = geo.latitude ? String(geo.latitude) : "";
+          const lon = geo.longitude ? String(geo.longitude) : "";
+          const name = [geo.city, geo.region].filter(Boolean).join(", ") || geo.country_name || "";
+          this.json(res, { lat, lon, name });
+        } catch {
+          this.json(res, { lat: "", lon: "", name: "", error: "无法自动检测位置" });
+        }
+        return;
+      }
+
       // --- Board endpoints ---
       if (path === "/api/board/weather" && method === "GET") {
         const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
-        const lat = url.searchParams.get("lat") ?? "39.9";
-        const lon = url.searchParams.get("lon") ?? "116.4";
+        const cfgLoc = this.butler.config.get().location;
+        const lat = url.searchParams.get("lat") ?? cfgLoc?.lat ?? "39.9";
+        const lon = url.searchParams.get("lon") ?? cfgLoc?.lon ?? "116.4";
 
         if (weatherCache && Date.now() - weatherCache.fetchedAt < WEATHER_CACHE_TTL) {
           this.json(res, weatherCache.data);
@@ -489,32 +530,34 @@ export class NichijouServer {
         }
 
         try {
-          const apiUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1`;
-          const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
-          const json = await resp.json() as {
-            current: { temperature_2m: number; weather_code: number };
-            daily: { temperature_2m_max: number[]; temperature_2m_min: number[] };
-          };
+          const [nowResult, forecastResult] = await Promise.all([
+            this.butler.pluginHost.executeTool("weather_now", { lat, lon }),
+            this.butler.pluginHost.executeTool("weather_forecast", { lat, lon, days: 1, startDay: 0 }),
+          ]);
 
-          let location = "";
-          try {
-            const geoResp = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=zh&zoom=10`, { signal: AbortSignal.timeout(5000), headers: { "User-Agent": "NichijouLoop/1.0" } });
-            const geoJson = await geoResp.json() as { address?: { city?: string; town?: string; county?: string; state?: string; suburb?: string; district?: string } };
-            const addr = geoJson.address;
-            if (addr) {
-              location = addr.city || addr.town || addr.county || addr.district || addr.suburb || addr.state || "";
-            }
-          } catch { /* location is optional */ }
+          const lines = nowResult.content.split("\n");
+          const locLine = lines.find((l) => l.startsWith("\u{1F4CD}"));
+          const tempLine = lines.find((l) => l.startsWith("\u{1F321}"));
+          const rangeLine = lines.find((l) => l.startsWith("\u2195"));
 
-          const data = {
-            temp: Math.round(json.current.temperature_2m),
-            tempMax: Math.round(json.daily.temperature_2m_max[0]!),
-            tempMin: Math.round(json.daily.temperature_2m_min[0]!),
-            weatherCode: json.current.weather_code,
-            description: WMO_DESCRIPTIONS[json.current.weather_code] ?? "未知",
-            location,
+          const location = locLine?.replace("\u{1F4CD} ", "") ?? "";
+          const tempMatch = tempLine?.match(/([-\d]+)°C/);
+          const temp = tempMatch ? parseInt(tempMatch[1]!) : null;
+          const descMatch = tempLine?.match(/· (.+)/);
+          const description = descMatch ? descMatch[1]! : "未知";
+          const rangeMatch = rangeLine?.match(/([-\d]+)° \/ ([-\d]+)°/);
+          const tempMin = rangeMatch ? parseInt(rangeMatch[1]!) : null;
+          const tempMax = rangeMatch ? parseInt(rangeMatch[2]!) : null;
+
+          const codeMap: Record<string, number> = {
+            "晴": 0, "大部晴朗": 1, "局部多云": 2, "多云": 3,
+            "雾": 45, "小雨": 61, "中雨": 63, "大雨": 65,
+            "小雪": 71, "中雪": 73, "大雪": 75, "阵雨": 80, "雷暴": 95,
           };
-          weatherCache = { data, fetchedAt: Date.now() };
+          const weatherCode = codeMap[description] ?? 0;
+
+          const data = { temp, tempMax, tempMin, weatherCode, description, location };
+          weatherCache = { data: data as WeatherCache["data"], fetchedAt: Date.now() };
           this.json(res, data);
         } catch {
           this.json(res, { temp: null, description: "获取失败", weatherCode: -1, tempMax: null, tempMin: null, location: "" });
@@ -557,6 +600,46 @@ export class NichijouServer {
         });
 
         this.json(res, { family: familyData, members: memberDetails, soul });
+        return;
+      }
+
+      // --- Reminder API ---
+
+      if (path === "/api/reminders" && method === "GET") {
+        const remindersUrl = new URL(req.url ?? "/", `http://${req.headers.host}`);
+        const memberId = remindersUrl.searchParams.get("memberId") ?? undefined;
+        const reminders = this.butler.db.getReminders(memberId);
+        this.json(res, reminders);
+        return;
+      }
+
+      if (path === "/api/reminders" && method === "POST") {
+        const body = (await this.readBody(req)) as { memberId: string; message: string; triggerAt: string; channel?: string };
+        const reminder = this.butler.reminderScheduler.add({
+          memberId: body.memberId,
+          message: body.message,
+          triggerAt: body.triggerAt,
+          channel: (body.channel as "wechat" | "dashboard" | "both") ?? "wechat",
+        });
+        this.json(res, reminder, 201);
+        return;
+      }
+
+      if (path.startsWith("/api/reminders/") && method === "PUT") {
+        const id = path.split("/")[3]!;
+        const body = (await this.readBody(req)) as { message?: string; triggerAt?: string; channel?: string };
+        this.butler.db.updateReminder(id, body);
+        if (body.triggerAt) {
+          this.butler.reminderScheduler.reschedule(id);
+        }
+        this.json(res, { ok: true });
+        return;
+      }
+
+      if (path.startsWith("/api/reminders/") && method === "DELETE") {
+        const id = path.split("/")[3]!;
+        this.butler.reminderScheduler.cancel(id);
+        this.json(res, { ok: true });
         return;
       }
 
