@@ -310,8 +310,9 @@ export function MembersPage() {
     }
   }
 
-  async function parseWithAi(descOverride?: string) {
-    const desc = asText(descOverride ?? aiDescription);
+  async function parseWithAi(descOverride?: unknown) {
+    const normalizedOverride = typeof descOverride === "string" ? descOverride : undefined;
+    const desc = asText(normalizedOverride ?? aiDescription);
     if (!selectedId || !desc.trim() || aiParsing) return;
     setAiParsing(true);
     setAiError(null);
@@ -608,7 +609,7 @@ export function MembersPage() {
                           手动创建
                         </button>
                         <button
-                          onClick={parseWithAi}
+                          onClick={() => { void parseWithAi(); }}
                     disabled={!asText(aiDescription).trim() || aiParsing}
                           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
                         >
