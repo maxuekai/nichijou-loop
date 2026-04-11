@@ -378,6 +378,21 @@ export class NichijouServer {
         return;
       }
 
+      if (path.startsWith("/api/overrides/") && (method === "PUT" || method === "DELETE")) {
+        const parts = path.split("/");
+        const memberId = parts[3]!;
+        const overrideId = parts[4]!;
+        if (method === "PUT") {
+          const body = await this.readBody(req) as Record<string, unknown>;
+          this.butler.routineEngine.updateOverride(memberId, overrideId, body as never);
+          this.json(res, { ok: true });
+        } else {
+          const removed = this.butler.routineEngine.removeOverride(memberId, overrideId);
+          this.json(res, { ok: removed });
+        }
+        return;
+      }
+
       if (path === "/api/setup/complete" && method === "POST") {
         this.butler.config.update({ setupCompleted: true });
         this.json(res, { ok: true });

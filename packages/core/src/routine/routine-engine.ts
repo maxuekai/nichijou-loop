@@ -57,6 +57,25 @@ export class RoutineEngine {
     this.saveOverrides(memberId, overrides);
   }
 
+  updateOverride(memberId: string, overrideId: string, data: Partial<Override>): void {
+    const overrides = this.getOverrides(memberId);
+    const idx = overrides.findIndex((o) => o.id === overrideId);
+    if (idx === -1) {
+      this.addOverride(memberId, { ...data, id: overrideId } as Override);
+      return;
+    }
+    overrides[idx] = { ...overrides[idx]!, ...data, id: overrideId };
+    this.saveOverrides(memberId, overrides);
+  }
+
+  removeOverride(memberId: string, overrideId: string): boolean {
+    const overrides = this.getOverrides(memberId);
+    const filtered = overrides.filter((o) => o.id !== overrideId);
+    if (filtered.length === overrides.length) return false;
+    this.saveOverrides(memberId, filtered);
+    return true;
+  }
+
   resolveDayPlan(memberId: string, date: Date): DayPlan {
     const weekday = date.getDay();
     const dateStr = formatDate(date);

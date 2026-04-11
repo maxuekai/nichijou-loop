@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../api";
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
@@ -65,23 +65,10 @@ export function MembersPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MemberDetail | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [tab, setTab] = useState<"profile" | "routines" | "plan">("plan");
+  const [tab, setTab] = useState<"plan" | "routines" | "overrides" | "profile">("plan");
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
-
-  // Interview chat state
-  const [interviewing, setInterviewing] = useState(false);
-  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const [finishing, setFinishing] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  // Interview result preview
-  const [interviewResult, setInterviewResult] = useState<{ profile: string; routines: Routine[] } | null>(null);
-  const [selectedRoutineIdx, setSelectedRoutineIdx] = useState<Set<number>>(new Set());
-  const [applyingResult, setApplyingResult] = useState(false);
 
   // Routine editing
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
@@ -93,6 +80,10 @@ export function MembersPage() {
   const [aiDescription, setAiDescription] = useState("");
   const [aiParsing, setAiParsing] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+
+  // Override editing
+  const [editingOverride, setEditingOverride] = useState<Override | null>(null);
+  const [deletingOverride, setDeletingOverride] = useState<string | null>(null);
 
   // Generate routines from profile
   const [generating, setGenerating] = useState(false);
@@ -145,105 +136,6 @@ export function MembersPage() {
       selectMember(selectedId);
     } catch { /* ignore */ }
     setSaving(false);
-  }
-
-  async function startInterview() {
-    if (!selectedId) return;
-    setChatMessages([]);
-    setChatLoading(true);
-    setInterviewing(true);
-    setInterviewResult(null);
-    try {
-      const res = await fetch(`/api/members/${selectedId}/interview/start`, { method: "POST" });
-      const data = await res.json() as { ok: boolean; reply: string; error?: string };
-      if (data.ok) {
-        setChatMessages([{ role: "assistant", content: data.reply }]);
-      } else {
-        setChatMessages([{ role: "assistant", content: `启动失败：${data.error ?? "未知错误"}` }]);
-      }
-    } catch {
-      setChatMessages([{ role: "assistant", content: "启动失败，请检查 LLM 连接。" }]);
-    }
-    setChatLoading(false);
-  }
-
-  async function sendChatMessage() {
-    if (!selectedId || !chatInput.trim() || chatLoading) return;
-    const userMsg = chatInput.trim();
-    setChatInput("");
-    setChatMessages((prev) => [...prev, { role: "user", content: userMsg }]);
-    setChatLoading(true);
-    try {
-      const res = await fetch(`/api/members/${selectedId}/interview/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMsg }),
-      });
-      const data = await res.json() as { ok: boolean; reply: string; error?: string };
-      if (data.ok) {
-        setChatMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
-      }
-    } catch { /* ignore */ }
-    setChatLoading(false);
-    setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-  }
-
-  async function finishInterview() {
-    if (!selectedId) return;
-    setFinishing(true);
-    try {
-      const res = await fetch(`/api/members/${selectedId}/interview/finish`, { method: "POST" });
-      const data = await res.json() as { ok: boolean; profile: string; routines: Routine[]; error?: string };
-      if (data.ok) {
-        setInterviewResult({ profile: data.profile, routines: data.routines });
-        setSelectedRoutineIdx(new Set(data.routines.map((_, i) => i)));
-      }
-    } catch { /* ignore */ }
-    setFinishing(false);
-  }
-
-  async function cancelInterview() {
-    if (!selectedId) return;
-    await fetch(`/api/members/${selectedId}/interview/cancel`, { method: "POST" });
-    setInterviewing(false);
-    setChatMessages([]);
-    setInterviewResult(null);
-  }
-
-  function toggleRoutine(idx: number) {
-    setSelectedRoutineIdx((prev) => {
-      const next = new Set(prev);
-      if (next.has(idx)) next.delete(idx);
-      else next.add(idx);
-      return next;
-    });
-  }
-
-  async function applyInterviewResult() {
-    if (!selectedId || !interviewResult) return;
-    setApplyingResult(true);
-    try {
-      if (interviewResult.profile) {
-        await fetch(`/api/members/${selectedId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ profile: interviewResult.profile }),
-        });
-      }
-      const selectedRoutines = interviewResult.routines.filter((_, i) => selectedRoutineIdx.has(i));
-      if (selectedRoutines.length > 0) {
-        await fetch(`/api/members/${selectedId}/apply-routines`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ routines: selectedRoutines }),
-        });
-      }
-      setInterviewing(false);
-      setChatMessages([]);
-      setInterviewResult(null);
-      selectMember(selectedId);
-    } catch { /* ignore */ }
-    setApplyingResult(false);
   }
 
   async function deleteMember(id: string) {
@@ -315,6 +207,28 @@ export function MembersPage() {
       selectMember(selectedId);
     } catch { /* ignore */ }
     setApplyingGen(false);
+  }
+
+  async function saveOverride(ovr: Override) {
+    if (!selectedId) return;
+    try {
+      await fetch(`/api/overrides/${selectedId}/${ovr.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ovr),
+      });
+      setEditingOverride(null);
+      selectMember(selectedId);
+    } catch { /* ignore */ }
+  }
+
+  async function deleteOverride(ovrId: string) {
+    if (!selectedId) return;
+    try {
+      await fetch(`/api/overrides/${selectedId}/${ovrId}`, { method: "DELETE" });
+      setDeletingOverride(null);
+      selectMember(selectedId);
+    } catch { /* ignore */ }
   }
 
   async function parseWithAi() {
@@ -459,6 +373,7 @@ export function MembersPage() {
               {([
                 ["plan", "今日计划"],
                 ["routines", "7 days"],
+                ["overrides", "临时变动"],
                 ["profile", "成员档案"],
               ] as const).map(([key, label]) => (
                 <button
@@ -523,20 +438,12 @@ export function MembersPage() {
                     <h3 className="text-sm font-medium text-stone-500">
                       7 days · {detail.routines.length} 项习惯
                     </h3>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => { setShowAiInput(true); setAiDescription(""); setAiError(null); }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
-                      >
-                        + 新增习惯
-                      </button>
-                      <button
-                        onClick={() => { setTab("profile"); startInterview(); }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 bg-stone-100 hover:bg-stone-200 transition-colors cursor-pointer"
-                      >
-                        AI 引导填写
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => { setShowAiInput(true); setAiDescription(""); setAiError(null); }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
+                    >
+                      + 新增习惯
+                    </button>
                   </div>
 
                   {/* AI smart input */}
@@ -707,12 +614,37 @@ export function MembersPage() {
                   )}
                 </div>
 
-                {/* Overrides */}
-                {detail.overrides.length > 0 && (
-                  <div className="bg-white rounded-xl border border-stone-200 p-6">
-                    <h3 className="text-sm font-medium text-stone-500 mb-4">
+              </div>
+            )}
+
+            {/* Overrides tab */}
+            {tab === "overrides" && (
+              <div className="space-y-4">
+                <div className="bg-white rounded-xl border border-stone-200 p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium text-stone-500">
                       临时变动 · {detail.overrides.length} 项
                     </h3>
+                    <button
+                      onClick={() => {
+                        setEditingOverride({
+                          id: `ovr_${Date.now().toString(36)}`,
+                          action: "skip",
+                          date: new Date().toISOString().split("T")[0],
+                        });
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
+                    >
+                      + 新增变动
+                    </button>
+                  </div>
+
+                  {detail.overrides.length === 0 ? (
+                    <div className="py-6 text-center space-y-2">
+                      <p className="text-sm text-stone-400">暂无临时变动</p>
+                      <p className="text-xs text-stone-400">可以跳过、新增或修改某段时间内的习惯安排</p>
+                    </div>
+                  ) : (
                     <div className="space-y-2">
                       {detail.overrides.map((ovr) => {
                         const actionLabels: Record<string, { text: string; color: string }> = {
@@ -722,331 +654,187 @@ export function MembersPage() {
                         };
                         const a = actionLabels[ovr.action] ?? { text: ovr.action, color: "bg-stone-100 text-stone-500" };
                         return (
-                          <div key={ovr.id} className="flex items-center gap-3 p-3 rounded-lg bg-stone-50">
+                          <div key={ovr.id} className="flex items-center gap-3 p-3 rounded-lg bg-stone-50 group">
                             <span className={`text-xs px-2 py-0.5 rounded font-medium ${a.color}`}>{a.text}</span>
-                            <div className="flex-1">
-                              <p className="text-sm text-stone-700">{ovr.title ?? ovr.reason ?? ovr.routineId ?? "临时变动"}</p>
-                              <p className="text-xs text-stone-400 mt-0.5">
-                                {ovr.date ?? (ovr.dateRange ? `${ovr.dateRange.start} ~ ${ovr.dateRange.end}` : "")}
-                              </p>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-stone-700">{ovr.title ?? ovr.reason ?? "临时变动"}</p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <p className="text-xs text-stone-400">
+                                  {ovr.date
+                                    ? ovr.date
+                                    : ovr.dateRange
+                                      ? `${ovr.dateRange.start} ~ ${ovr.dateRange.end}`
+                                      : ""}
+                                </p>
+                                {ovr.timeSlot && (
+                                  <span className="text-xs text-stone-400">{formatTimeSlot(ovr.timeSlot)}</span>
+                                )}
+                                {ovr.routineId && (
+                                  <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded">
+                                    覆盖: {detail.routines.find((r) => r.id === ovr.routineId)?.title ?? ovr.routineId}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() => setEditingOverride({ ...ovr })}
+                                className="p-1.5 rounded-md text-stone-400 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
+                                title="编辑"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => setDeletingOverride(ovr.id)}
+                                className="p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-red-50 transition-colors cursor-pointer"
+                                title="删除"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
                             </div>
                           </div>
                         );
                       })}
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             )}
 
             {/* Profile */}
             {tab === "profile" && (
               <div className="space-y-4">
-                {/* Interview chat UI */}
-                {interviewing && !interviewResult && (
-                  <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
-                    <div className="flex items-center justify-between p-4 border-b border-stone-100 bg-amber-50/50">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                        <h3 className="text-sm font-medium text-stone-700">AI 引导填写</h3>
-                      </div>
+                <div className="bg-white rounded-xl border border-stone-200 p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium text-stone-500">成员档案</h3>
+                    {!editing ? (
+                      <button
+                        onClick={startEditing}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:bg-stone-100 transition-colors"
+                      >
+                        编辑
+                      </button>
+                    ) : (
                       <div className="flex gap-2">
                         <button
-                          onClick={cancelInterview}
+                          onClick={() => setEditing(false)}
                           className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:bg-stone-100 transition-colors"
                         >
                           取消
                         </button>
                         <button
-                          onClick={finishInterview}
-                          disabled={chatMessages.length < 4 || finishing}
+                          onClick={saveProfile}
+                          disabled={saving}
                           className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-50 transition-colors"
                         >
-                          {finishing ? "生成中..." : "完成并生成档案"}
+                          {saving ? "保存中..." : "保存"}
                         </button>
-                      </div>
-                    </div>
-
-                    <div className="h-[400px] overflow-auto p-4 space-y-3 bg-stone-50/50">
-                      {chatMessages.map((msg, i) => (
-                        <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                          <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
-                            msg.role === "user"
-                              ? "bg-amber-500 text-white rounded-br-md"
-                              : "bg-white text-stone-700 border border-stone-200 rounded-bl-md"
-                          }`}>
-                            {msg.content}
-                          </div>
-                        </div>
-                      ))}
-                      {chatLoading && (
-                        <div className="flex justify-start">
-                          <div className="bg-white text-stone-400 border border-stone-200 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">
-                            <span className="inline-flex gap-1">
-                              <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                              <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                              <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                      <div ref={chatEndRef} />
-                    </div>
-
-                    <div className="p-3 border-t border-stone-100 bg-white">
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={chatInput}
-                          onChange={(e) => setChatInput(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendChatMessage()}
-                          placeholder="输入你的回答..."
-                          disabled={chatLoading}
-                          className="flex-1 px-4 py-2.5 rounded-xl border border-stone-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 disabled:opacity-50"
-                        />
-                        <button
-                          onClick={sendChatMessage}
-                          disabled={!chatInput.trim() || chatLoading}
-                          className="px-4 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
-                        >
-                          发送
-                        </button>
-                      </div>
-                      <p className="text-xs text-stone-400 mt-2 text-center">
-                        回答完所有问题后，点击上方「完成并生成档案」
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Interview result preview */}
-                {interviewResult && (
-                  <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
-                    <div className="p-4 border-b border-stone-100 bg-amber-50/50">
-                      <h3 className="text-sm font-medium text-stone-700">AI 整理结果</h3>
-                      <p className="text-xs text-stone-500 mt-0.5">请检查以下档案和 7 days 习惯，确认后保存</p>
-                    </div>
-
-                    <div className="p-5 space-y-5 max-h-[500px] overflow-auto">
-                      <div>
-                        <h4 className="text-xs font-medium text-stone-500 mb-2">成员档案</h4>
-                        <pre className="text-sm text-stone-700 whitespace-pre-wrap font-mono leading-relaxed bg-stone-50 rounded-lg p-4 border border-stone-100">
-                          {interviewResult.profile || "（未生成档案）"}
-                        </pre>
-                      </div>
-
-                      {interviewResult.routines.length > 0 && (
-                        <div>
-                          <h4 className="text-xs font-medium text-stone-500 mb-2">
-                            识别的 7 days 习惯 · {interviewResult.routines.length} 项
-                          </h4>
-                          <div className="space-y-2">
-                            {interviewResult.routines.map((routine, idx) => (
-                              <label
-                                key={idx}
-                                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                                  selectedRoutineIdx.has(idx)
-                                    ? "border-amber-300 bg-amber-50/50"
-                                    : "border-stone-200 bg-stone-50 opacity-60"
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={selectedRoutineIdx.has(idx)}
-                                  onChange={() => toggleRoutine(idx)}
-                                  className="mt-0.5 rounded border-stone-300 text-amber-500 focus:ring-amber-500/20"
-                                />
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium text-stone-800">{routine.title}</p>
-                                  <div className="flex items-center gap-3 mt-1">
-                                    <div className="flex gap-0.5">
-                                      {[0, 1, 2, 3, 4, 5, 6].map((d) => (
-                                        <span key={d} className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${
-                                          routine.weekdays.includes(d)
-                                            ? "bg-amber-500 text-white font-medium"
-                                            : "bg-stone-200 text-stone-400"
-                                        }`}>{WEEKDAY_NAMES[d]}</span>
-                                      ))}
-                                    </div>
-                                    {routine.time && <span className="text-xs text-stone-500">{routine.time}</span>}
-                                    {routine.timeSlot && <span className="text-xs text-stone-400">{formatTimeSlot(routine.timeSlot)}</span>}
-                                  </div>
-                                </div>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="p-4 border-t border-stone-100 flex justify-between">
-                      <button
-                        onClick={() => { setInterviewResult(null); }}
-                        className="px-4 py-2 rounded-lg text-sm text-stone-500 hover:bg-stone-100 transition-colors"
-                      >
-                        返回继续对话
-                      </button>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={cancelInterview}
-                          className="px-4 py-2 rounded-lg text-sm text-stone-500 hover:bg-stone-100 transition-colors"
-                        >
-                          放弃
-                        </button>
-                        <button
-                          onClick={applyInterviewResult}
-                          disabled={applyingResult}
-                          className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
-                        >
-                          {applyingResult ? "保存中..." : "确认保存"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Normal profile view (when not interviewing) */}
-                {!interviewing && (
-                  <div className="space-y-4">
-                    <div className="bg-white rounded-xl border border-stone-200 p-6">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-sm font-medium text-stone-500">成员档案</h3>
-                        {!editing ? (
-                          <div className="flex gap-2">
-                            <button
-                              onClick={startInterview}
-                              className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
-                            >
-                              AI 引导填写
-                            </button>
-                            <button
-                              onClick={startEditing}
-                              className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:bg-stone-100 transition-colors"
-                            >
-                              手动编辑
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => setEditing(false)}
-                              className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:bg-stone-100 transition-colors"
-                            >
-                              取消
-                            </button>
-                            <button
-                              onClick={saveProfile}
-                              disabled={saving}
-                              className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-50 transition-colors"
-                            >
-                              {saving ? "保存中..." : "保存"}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                      {editing ? (
-                        <textarea
-                          value={editContent}
-                          onChange={(e) => setEditContent(e.target.value)}
-                          className="w-full h-[500px] text-sm text-stone-700 font-mono leading-relaxed bg-stone-50 rounded-lg p-4 border border-stone-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
-                          spellCheck={false}
-                        />
-                      ) : (
-                        <pre className="text-sm text-stone-700 whitespace-pre-wrap font-mono leading-relaxed bg-stone-50 rounded-lg p-4 max-h-[600px] overflow-auto">
-                          {detail.profile || "暂无档案，点击「AI 引导填写」让管家帮你完善"}
-                        </pre>
-                      )}
-
-                      {/* Generate from profile button */}
-                      {!editing && detail.profile && (
-                        <div className="mt-4 pt-4 border-t border-stone-100">
-                          <button
-                            onClick={generateFromProfile}
-                            disabled={generating}
-                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 transition-colors"
-                          >
-                            {generating ? (
-                              <>
-                                <span className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                                正在分析档案…
-                              </>
-                            ) : (
-                              "从档案生成 7 days 习惯"
-                            )}
-                          </button>
-                          <p className="text-xs text-stone-400 mt-1.5">
-                            AI 将从档案内容中自动识别每周重复的生活习惯
-                          </p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Generated routines preview */}
-                    {generatedRoutines && (
-                      <div className="bg-white rounded-xl border border-amber-200 overflow-hidden">
-                        <div className="p-4 border-b border-amber-100 bg-amber-50/50">
-                          <h3 className="text-sm font-medium text-stone-700">从档案识别的 7 days 习惯</h3>
-                          <p className="text-xs text-stone-500 mt-0.5">选择需要添加的习惯，然后确认保存</p>
-                        </div>
-                        <div className="p-4 space-y-2">
-                          {generatedRoutines.map((routine, idx) => (
-                            <label
-                              key={idx}
-                              className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                                selectedGenIdx.has(idx)
-                                  ? "border-amber-300 bg-amber-50/50"
-                                  : "border-stone-200 bg-stone-50 opacity-60"
-                              }`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selectedGenIdx.has(idx)}
-                                onChange={() => {
-                                  setSelectedGenIdx((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(idx)) next.delete(idx); else next.add(idx);
-                                    return next;
-                                  });
-                                }}
-                                className="mt-0.5 rounded border-stone-300 text-amber-500 focus:ring-amber-500/20"
-                              />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-stone-800">{routine.title}</p>
-                                <div className="flex items-center gap-3 mt-1">
-                                  <div className="flex gap-0.5">
-                                    {[0, 1, 2, 3, 4, 5, 6].map((d) => (
-                                      <span key={d} className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${
-                                        routine.weekdays.includes(d)
-                                          ? "bg-amber-500 text-white font-medium"
-                                          : "bg-stone-200 text-stone-400"
-                                      }`}>{WEEKDAY_NAMES[d]}</span>
-                                    ))}
-                                  </div>
-                                  {routine.time && <span className="text-xs text-stone-500">{routine.time}</span>}
-                                  {routine.timeSlot && <span className="text-xs text-stone-400">{formatTimeSlot(routine.timeSlot)}</span>}
-                                </div>
-                              </div>
-                            </label>
-                          ))}
-                        </div>
-                        <div className="p-4 border-t border-amber-100 flex justify-end gap-2">
-                          <button
-                            onClick={() => setGeneratedRoutines(null)}
-                            className="px-4 py-2 rounded-lg text-sm text-stone-500 hover:bg-stone-100 transition-colors"
-                          >
-                            取消
-                          </button>
-                          <button
-                            onClick={applyGeneratedRoutines}
-                            disabled={applyingGen || selectedGenIdx.size === 0}
-                            className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
-                          >
-                            {applyingGen ? "保存中..." : `添加 ${selectedGenIdx.size} 项习惯`}
-                          </button>
-                        </div>
                       </div>
                     )}
+                  </div>
+
+                  {editing ? (
+                    <textarea
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      className="w-full h-[500px] text-sm text-stone-700 font-mono leading-relaxed bg-stone-50 rounded-lg p-4 border border-stone-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
+                      spellCheck={false}
+                    />
+                  ) : (
+                    <pre className="text-sm text-stone-700 whitespace-pre-wrap font-mono leading-relaxed bg-stone-50 rounded-lg p-4 max-h-[600px] overflow-auto">
+                      {detail.profile || "暂无档案，可手动编辑添加"}
+                    </pre>
+                  )}
+
+                  {!editing && detail.profile && (
+                    <div className="mt-4 pt-4 border-t border-stone-100">
+                      <button
+                        onClick={generateFromProfile}
+                        disabled={generating}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                      >
+                        {generating ? (
+                          <>
+                            <span className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                            正在分析档案…
+                          </>
+                        ) : (
+                          "从档案生成 7 days 习惯"
+                        )}
+                      </button>
+                      <p className="text-xs text-stone-400 mt-1.5">
+                        AI 将从档案内容中自动识别每周重复的生活习惯
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {generatedRoutines && (
+                  <div className="bg-white rounded-xl border border-amber-200 overflow-hidden">
+                    <div className="p-4 border-b border-amber-100 bg-amber-50/50">
+                      <h3 className="text-sm font-medium text-stone-700">从档案识别的 7 days 习惯</h3>
+                      <p className="text-xs text-stone-500 mt-0.5">选择需要添加的习惯，然后确认保存</p>
+                    </div>
+                    <div className="p-4 space-y-2">
+                      {generatedRoutines.map((routine, idx) => (
+                        <label
+                          key={idx}
+                          className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                            selectedGenIdx.has(idx)
+                              ? "border-amber-300 bg-amber-50/50"
+                              : "border-stone-200 bg-stone-50 opacity-60"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedGenIdx.has(idx)}
+                            onChange={() => {
+                              setSelectedGenIdx((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(idx)) next.delete(idx); else next.add(idx);
+                                return next;
+                              });
+                            }}
+                            className="mt-0.5 rounded border-stone-300 text-amber-500 focus:ring-amber-500/20"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-stone-800">{routine.title}</p>
+                            <div className="flex items-center gap-3 mt-1">
+                              <div className="flex gap-0.5">
+                                {[0, 1, 2, 3, 4, 5, 6].map((d) => (
+                                  <span key={d} className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${
+                                    routine.weekdays.includes(d)
+                                      ? "bg-amber-500 text-white font-medium"
+                                      : "bg-stone-200 text-stone-400"
+                                  }`}>{WEEKDAY_NAMES[d]}</span>
+                                ))}
+                              </div>
+                              {routine.time && <span className="text-xs text-stone-500">{routine.time}</span>}
+                              {routine.timeSlot && <span className="text-xs text-stone-400">{formatTimeSlot(routine.timeSlot)}</span>}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="p-4 border-t border-amber-100 flex justify-end gap-2">
+                      <button
+                        onClick={() => setGeneratedRoutines(null)}
+                        className="px-4 py-2 rounded-lg text-sm text-stone-500 hover:bg-stone-100 transition-colors"
+                      >
+                        取消
+                      </button>
+                      <button
+                        onClick={applyGeneratedRoutines}
+                        disabled={applyingGen || selectedGenIdx.size === 0}
+                        className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                      >
+                        {applyingGen ? "保存中..." : `添加 ${selectedGenIdx.size} 项习惯`}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1375,6 +1163,170 @@ export function MembersPage() {
               >
                 保存
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete override confirmation dialog */}
+      {deletingOverride && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setDeletingOverride(null)}>
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-stone-800 mb-2">删除临时变动</h3>
+            <p className="text-sm text-stone-500 mb-6">确定要删除这条临时变动吗？</p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setDeletingOverride(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors">取消</button>
+              <button onClick={() => deleteOverride(deletingOverride)} className="px-4 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-colors">删除</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit override dialog */}
+      {editingOverride && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingOverride(null)}>
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-stone-800 mb-4">
+              {detail?.overrides.some((o) => o.id === editingOverride.id) ? "编辑临时变动" : "新增临时变动"}
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-1">变动类型</label>
+                <select
+                  value={editingOverride.action}
+                  onChange={(e) => setEditingOverride({ ...editingOverride, action: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                >
+                  <option value="skip">跳过（不执行某习惯）</option>
+                  <option value="add">新增（临时添加活动）</option>
+                  <option value="modify">修改（替换习惯内容）</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-2">时间范围</label>
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-xs text-stone-600">
+                    <input
+                      type="radio"
+                      name="dateMode"
+                      checked={!editingOverride.dateRange}
+                      onChange={() => {
+                        const { dateRange: _, ...rest } = editingOverride;
+                        void _;
+                        setEditingOverride({ ...rest, date: editingOverride.date || new Date().toISOString().split("T")[0] });
+                      }}
+                      className="text-amber-500 focus:ring-amber-500/20"
+                    />
+                    单日
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-stone-600">
+                    <input
+                      type="radio"
+                      name="dateMode"
+                      checked={!!editingOverride.dateRange}
+                      onChange={() => {
+                        const today = new Date().toISOString().split("T")[0]!;
+                        const { date: _, ...rest } = editingOverride;
+                        void _;
+                        setEditingOverride({ ...rest, dateRange: { start: today, end: today } });
+                      }}
+                      className="text-amber-500 focus:ring-amber-500/20"
+                    />
+                    时间段
+                  </label>
+                </div>
+                {!editingOverride.dateRange ? (
+                  <input
+                    type="date"
+                    value={editingOverride.date ?? ""}
+                    onChange={(e) => setEditingOverride({ ...editingOverride, date: e.target.value })}
+                    className="mt-2 w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                ) : (
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-stone-400 mb-0.5">开始日期</label>
+                      <input
+                        type="date"
+                        value={editingOverride.dateRange.start}
+                        onChange={(e) => setEditingOverride({ ...editingOverride, dateRange: { ...editingOverride.dateRange!, start: e.target.value } })}
+                        className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-stone-400 mb-0.5">结束日期</label>
+                      <input
+                        type="date"
+                        value={editingOverride.dateRange.end}
+                        onChange={(e) => setEditingOverride({ ...editingOverride, dateRange: { ...editingOverride.dateRange!, end: e.target.value } })}
+                        className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-1">时段（可选）</label>
+                <select
+                  value={editingOverride.timeSlot ?? ""}
+                  onChange={(e) => setEditingOverride({ ...editingOverride, timeSlot: e.target.value || undefined })}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                >
+                  <option value="">全天</option>
+                  <option value="morning">上午</option>
+                  <option value="afternoon">下午</option>
+                  <option value="evening">晚上</option>
+                </select>
+              </div>
+
+              {(editingOverride.action === "skip" || editingOverride.action === "modify") && detail && detail.routines.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-1">覆盖的 7 days 习惯</label>
+                  <select
+                    value={editingOverride.routineId ?? ""}
+                    onChange={(e) => setEditingOverride({ ...editingOverride, routineId: e.target.value || undefined })}
+                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  >
+                    <option value="">所有习惯（该时段内全部覆盖）</option>
+                    {detail.routines.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.title} ({formatWeekdays(r.weekdays)}{r.time ? ` ${r.time}` : ""})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {editingOverride.action !== "skip" && (
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-1">活动名称</label>
+                  <input
+                    type="text"
+                    value={editingOverride.title ?? ""}
+                    onChange={(e) => setEditingOverride({ ...editingOverride, title: e.target.value })}
+                    placeholder="如：出差、旅行、休息日"
+                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-1">原因（可选）</label>
+                <input
+                  type="text"
+                  value={editingOverride.reason ?? ""}
+                  onChange={(e) => setEditingOverride({ ...editingOverride, reason: e.target.value })}
+                  placeholder="如：公司团建、身体不适"
+                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6">
+              <button onClick={() => setEditingOverride(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors cursor-pointer">取消</button>
+              <button onClick={() => saveOverride(editingOverride)} className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors cursor-pointer">保存</button>
             </div>
           </div>
         </div>
