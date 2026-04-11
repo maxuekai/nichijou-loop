@@ -3,7 +3,7 @@ import type { LLMProvider } from "@nichijou/ai";
 import { AgentSession, createAgentSession } from "@nichijou/agent";
 import type { AgentEvent } from "@nichijou/agent";
 import { getZonedDateTimeParts } from "@nichijou/shared";
-import type { FamilyMember, InboundMessage, ToolDefinition, Routine, Plan } from "@nichijou/shared";
+import type { FamilyMember, InboundMessage, ToolDefinition, Routine, RoutineAction, Plan } from "@nichijou/shared";
 import { hostname, platform, arch, cpus, totalmem, freemem, uptime as osUptime, loadavg } from "node:os";
 import type { Channel } from "./gateway/channel.js";
 import type { ChannelStatus } from "@nichijou/shared";
@@ -881,8 +881,8 @@ export class ButlerService {
         weekdays: [1, 3, 5],
         time: "HH:MM",
         actions: [
-          { id: "act_xxx", type: "notify", trigger: "at", offsetMinutes: 0, message: "到时通知内容" },
-          { id: "act_yyy", type: "ai_task", trigger: "before", offsetMinutes: 60, prompt: "描述 AI 需要执行的任务" },
+          { id: "act_yyy", type: "ai_task", trigger: "at", offsetMinutes: 0, prompt: "描述 AI 需要执行的任务" },
+          { id: "act_xxx", type: "notify", trigger: "after", offsetMinutes: 0, message: "{{result}}" },
         ],
         warnings: ["如果用户描述的功能没有对应的已安装插件支持，在此列出警告"],
       }, null, 2),
@@ -897,7 +897,8 @@ export class ButlerService {
       "7. trigger: before=提前, at=准时, after=之后; offsetMinutes 表示提前/延后的分钟数，trigger=at 时 offsetMinutes=0",
       "8. 不要输出 channel 字段，系统会统一处理通知渠道",
       "9. 如果用户描述的功能需要某个插件但该插件未在可用列表中，在 warnings 数组中说明（如「需要天气插件但未安装」）",
-      "10. 只返回 JSON，不要有任何其他文字",
+      "10. 若包含 ai_task：将 ai_task 设为 trigger='at' offsetMinutes=0；notify 设为 trigger='after' offsetMinutes=0 且 message='{{result}}'",
+      "11. 只返回 JSON，不要有任何其他文字",
     ].filter(Boolean).join("\n");
 
     const provider = this.getProvider();
@@ -957,9 +958,33 @@ export class ButlerService {
         trigger: "at",
         offsetMinutes: 0,
         channel: "wechat",
-        message: routine.title,
+        message: routine.actions!.some((a) => a.type === "ai_task") ? "{{result}}" : routine.title,
       });
     }
+
+    if (routine.actions!.some((a) => a.type === "ai_task")) {
+      routine.actions = routine.actions!.map((a) => {
+        if (a.type === "ai_task") {
+          return { ...a, trigger: "at", offsetMinutes: 0 };
+        }
+        if (a.type !== "notify") return a;
+        if (!a.message || a.message === routine.title || a.message === "{{result}}") {
+          return { ...a, trigger: "after", offsetMinutes: 0, message: "{{result}}" };
+        }
+        return { ...a, trigger: "after", offsetMinutes: 0 };
+      });
+    }
+    routine.actions = [...routine.actions!].sort((a, b) => {
+      const triggerRank: Record<RoutineAction["trigger"], number> = { before: 0, at: 1, after: 2 };
+      const triggerDiff = triggerRank[a.trigger] - triggerRank[b.trigger];
+      if (triggerDiff !== 0) return triggerDiff;
+      const offsetDiff = a.offsetMinutes - b.offsetMinutes;
+      if (offsetDiff !== 0) return offsetDiff;
+      if (a.type === b.type) return 0;
+      if (a.type === "notify") return 1;
+      if (b.type === "notify") return -1;
+      return 0;
+    });
 
     if (routine.actions!.some((a) => a.type === "ai_task") && toolNames.length === 0) {
       warnings.push("当前没有已安装的插件，AI 任务可能无法调用外部工具");

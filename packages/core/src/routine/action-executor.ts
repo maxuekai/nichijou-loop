@@ -10,6 +10,10 @@ import type { Database } from "../db/database.js";
 import type { ConfigManager } from "../storage/config.js";
 
 type ChatForAction = (memberId: string, prompt: string) => Promise<string>;
+interface ActionExecutionContext {
+  latestTaskResult?: string;
+  hasNotifyAction: boolean;
+}
 
 const TIMESLOT_DEFAULTS: Record<string, string> = {
   morning: "08:00",
@@ -94,12 +98,16 @@ export class ActionExecutor {
         const effectiveTime = this.resolveTime(routine);
         if (!effectiveTime) continue;
         const actions = this.resolveActions(routine);
-        for (const action of actions) {
-          if (this.shouldFire(effectiveTime, action, now.hour, now.minute)) {
-            const already = this.db.wasActionExecutedAt(member.id, routine.id, action.id, now.minuteKey);
-            if (already) continue;
-            await this.executeAction(member.id, routine, action, now.minuteKey);
-          }
+        const dueActions = actions.filter((action) => this.shouldFire(effectiveTime, action, now.hour, now.minute));
+        if (dueActions.length === 0) continue;
+        const orderedActions = this.orderActionsForExecution(dueActions);
+        const context: ActionExecutionContext = {
+          hasNotifyAction: orderedActions.some((a) => a.type === "notify"),
+        };
+        for (const action of orderedActions) {
+          const already = this.db.wasActionExecutedAt(member.id, routine.id, action.id, now.minuteKey);
+          if (already) continue;
+          await this.executeAction(member.id, routine, action, now.minuteKey, context);
         }
       }
     }
@@ -128,16 +136,30 @@ export class ActionExecutor {
     return nowHH === targetHH && nowMM === targetMM;
   }
 
-  private async executeAction(memberId: string, routine: Routine, action: RoutineAction, minuteKey: string): Promise<void> {
+  private async executeAction(
+    memberId: string,
+    routine: Routine,
+    action: RoutineAction,
+    minuteKey: string,
+    context: ActionExecutionContext,
+  ): Promise<void> {
     console.log(`[ActionExecutor] 执行 action: ${action.type} for routine "${routine.title}" member=${memberId}`);
     let result = "";
     let success = true;
 
     try {
       switch (action.type) {
-        case "notify":
-          result = action.message ?? routine.title;
+        case "notify": {
+          const template = (action.message ?? "").trim();
+          if (template.includes("{{result}}")) {
+            result = template.replace(/\{\{result\}\}/g, context.latestTaskResult ?? routine.title);
+          } else if (template) {
+            result = template;
+          } else {
+            result = context.latestTaskResult ?? routine.title;
+          }
           break;
+        }
 
         case "plugin": {
           if (!action.toolName) {
@@ -156,6 +178,7 @@ export class ActionExecutor {
           const toolResult = await this.pluginHost.executeTool(action.toolName, params);
           result = toolResult.content;
           if (toolResult.isError) success = false;
+          if (success && result) context.latestTaskResult = result;
           break;
         }
 
@@ -180,6 +203,7 @@ export class ActionExecutor {
             result = "no LLM provider configured";
             success = false;
           }
+          if (success && result) context.latestTaskResult = result;
           break;
         }
       }
@@ -190,7 +214,8 @@ export class ActionExecutor {
 
     const channel = action.channel ?? "wechat";
     const shouldSendWeChat = channel === "wechat" || channel === "both";
-    if (success && result && shouldSendWeChat) {
+    const shouldDeferToNotify = action.type !== "notify" && context.hasNotifyAction;
+    if (success && result && shouldSendWeChat && !shouldDeferToNotify) {
       try {
         await this.gateway.sendToMember(memberId, result);
       } catch (err) {
@@ -202,12 +227,31 @@ export class ActionExecutor {
   }
 
   async triggerRoutineNow(memberId: string, routine: Routine): Promise<number> {
-    const actions = this.resolveActions(routine);
-    const triggerKeyPrefix = `manual_${new Date().toISOString()}_${routine.id}`;
+    const actions = this.orderActionsForExecution(this.resolveActions(routine));
+    const context: ActionExecutionContext = {
+      hasNotifyAction: actions.some((a) => a.type === "notify"),
+    };
     for (let i = 0; i < actions.length; i += 1) {
       const action = actions[i]!;
-      await this.executeAction(memberId, routine, action, `${triggerKeyPrefix}_${i}`);
+      const executedAt = new Date(Date.now() + i).toISOString();
+      await this.executeAction(memberId, routine, action, executedAt, context);
     }
     return actions.length;
+  }
+
+  private orderActionsForExecution(actions: RoutineAction[]): RoutineAction[] {
+    const triggerRank: Record<RoutineAction["trigger"], number> = {
+      before: 0,
+      at: 1,
+      after: 2,
+    };
+    const typeRank = (type: RoutineAction["type"]): number => (type === "notify" ? 2 : 1);
+    return [...actions].sort((a, b) => {
+      const triggerDiff = triggerRank[a.trigger] - triggerRank[b.trigger];
+      if (triggerDiff !== 0) return triggerDiff;
+      const offsetDiff = a.offsetMinutes - b.offsetMinutes;
+      if (offsetDiff !== 0) return offsetDiff;
+      return typeRank(a.type) - typeRank(b.type);
+    });
   }
 }

@@ -165,6 +165,18 @@ function formatDateShort(d: Date): string {
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
+function formatExecutedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
 // --- Main Component ---
 
 export function BoardView() {
@@ -589,13 +601,7 @@ export function BoardView() {
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-xs text-[#8a7e6d]">{n.memberName} · {n.routineTitle}</span>
                         <span className="text-[11px] text-[#6a6054]">
-                          {new Date(n.executedAt).toLocaleString("zh-CN", {
-                            month: "numeric",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            hour12: false,
-                          })}
+                          {formatExecutedAt(n.executedAt)}
                         </span>
                       </div>
                       <p className="text-sm text-[#c8b89a] line-clamp-2">{n.result || "已执行"}</p>

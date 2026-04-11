@@ -68,6 +68,18 @@ function asText(value: unknown): string {
   return String(value);
 }
 
+function formatExecutedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
 export function MembersPage() {
   const navigate = useNavigate();
   const [members, setMembers] = useState<Array<{ id: string; name: string; role: string; avatar?: string }>>([]);
@@ -803,7 +815,7 @@ export function MembersPage() {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2">
                                     <span className="font-medium text-stone-700">{routine?.title ?? log.routineId}</span>
-                                    <span className="text-stone-400">{new Date(log.executedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                                    <span className="text-stone-400">{formatExecutedAt(log.executedAt)}</span>
                                   </div>
                                   <p className="text-stone-500 mt-0.5 line-clamp-2">{log.result}</p>
                                 </div>
