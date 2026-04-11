@@ -86,7 +86,7 @@ export interface Routine {
   archived?: boolean;
 }
 
-export interface Override {
+export interface Plan {
   id: string;
   date?: string;
   dateRange?: { start: string; end: string };
@@ -95,9 +95,15 @@ export interface Override {
   routineId?: string;
   title?: string;
   reason?: string;
+  startTime?: string;
+  time?: string;
+  endTime?: string;
   timeSlot?: string;
   reminders?: ReminderRule[];
+  actions?: RoutineAction[];
 }
+// Backward compatibility for existing code and payloads.
+export type Override = Plan;
 
 export interface ReminderRule {
   offsetMinutes: number;
@@ -116,7 +122,7 @@ export interface DayPlanItem {
   title: string;
   timeSlot?: string;
   time?: string;
-  source: "routine" | "override" | "family_routine" | "family_override";
+  source: "routine" | "plan" | "family_routine" | "family_plan" | "override" | "family_override";
   routineId?: string;
   reminders: ReminderRule[];
 }

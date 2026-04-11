@@ -174,6 +174,7 @@ export function BoardView() {
   const [familyName, setFamilyName] = useState("");
   const [familyAvatar, setFamilyAvatar] = useState<string | null>(null);
   const [soul, setSoul] = useState("");
+  const [butlerNameConfig, setButlerNameConfig] = useState<string>("");
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [weekSchedule, setWeekSchedule] = useState<WeekSchedule>({});
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
@@ -215,6 +216,9 @@ export function BoardView() {
       setMembers(data.members);
       setSoul(data.soul);
       setNotifications(data.notifications ?? []);
+      const cfg = await api.getConfig();
+      const configuredName = typeof cfg.butlerName === "string" ? cfg.butlerName.trim() : "";
+      setButlerNameConfig(configuredName);
     } catch { /* ignore */ }
   }
 
@@ -236,7 +240,7 @@ export function BoardView() {
   const dateDay = now.getDate();
   const dateMonth = now.getMonth() + 1;
   const weekday = WEEKDAY_CN[now.getDay()];
-  const butlerName = extractButlerName(soul);
+  const butlerName = butlerNameConfig || extractButlerName(soul);
   const greeting = getTimeGreeting();
   const currentSlot = getCurrentSlot();
 

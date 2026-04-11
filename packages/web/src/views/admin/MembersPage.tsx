@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
@@ -36,7 +37,12 @@ interface Override {
   routineId?: string;
   title?: string;
   reason?: string;
+  startTime?: string;
+  endTime?: string;
+  time?: string;
   timeSlot?: string;
+  actions?: RoutineAction[];
+  reminders?: Array<{ offsetMinutes: number; message: string; channel: string }>;
 }
 
 interface DayPlanItem {
@@ -51,17 +57,19 @@ interface MemberDetail {
   member: { id: string; name: string; role: string; avatar?: string; channelBindings: Record<string, string> };
   profile: string;
   routines: Routine[];
+  plans?: Override[];
   overrides: Override[];
   dayPlan: { date: string; items: DayPlanItem[] };
 }
 
 export function MembersPage() {
+  const navigate = useNavigate();
   const [members, setMembers] = useState<Array<{ id: string; name: string; role: string; avatar?: string }>>([]);
   const [newName, setNewName] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MemberDetail | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [tab, setTab] = useState<"plan" | "routines" | "overrides" | "familyPlans" | "profile">("plan");
+  const [tab, setTab] = useState<"plan" | "routines" | "overrides" | "profile">("plan");
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
@@ -88,10 +96,6 @@ export function MembersPage() {
   // Action execution logs
   const [actionLogs, setActionLogs] = useState<Array<{ id: number; routineId: string; actionId: string; result: string; success: boolean; executedAt: string }>>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
-  const [familyPlans, setFamilyPlans] = useState<{ routines: Routine[]; overrides: Override[] }>({ routines: [], overrides: [] });
-  const [editingFamilyRoutine, setEditingFamilyRoutine] = useState<Routine | null>(null);
-  const [editingFamilyOverride, setEditingFamilyOverride] = useState<Override | null>(null);
-  const [assigneeInput, setAssigneeInput] = useState("@all");
 
   // Generate routines from profile
   const [generating, setGenerating] = useState(false);
@@ -101,7 +105,6 @@ export function MembersPage() {
 
   useEffect(() => {
     loadMembers();
-    loadFamilyPlans();
   }, []);
 
   async function loadMembers() {
@@ -130,7 +133,6 @@ export function MembersPage() {
     setLogsExpanded(false);
     setActionLogs([]);
     await refreshMemberDetail(id);
-    await loadFamilyPlans();
   }
 
   function startEditing() {
@@ -249,11 +251,7 @@ export function MembersPage() {
   async function saveOverride(ovr: Override) {
     if (!selectedId) return;
     try {
-      await fetch(`/api/overrides/${selectedId}/${ovr.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(ovr),
-      });
+      await api.upsertPlan(selectedId, ovr.id, ovr as unknown as Record<string, unknown>);
       setEditingOverride(null);
       await refreshMemberDetail(selectedId);
     } catch { /* ignore */ }
@@ -262,7 +260,7 @@ export function MembersPage() {
   async function deleteOverride(ovrId: string) {
     if (!selectedId) return;
     try {
-      await fetch(`/api/overrides/${selectedId}/${ovrId}`, { method: "DELETE" });
+      await api.deletePlan(selectedId, ovrId);
       setDeletingOverride(null);
       await refreshMemberDetail(selectedId);
     } catch { /* ignore */ }
@@ -306,32 +304,6 @@ export function MembersPage() {
     } catch { /* ignore */ }
   }
 
-  async function loadFamilyPlans() {
-    try {
-      const data = await api.getFamilyPlans();
-      setFamilyPlans({
-        routines: data.routines as unknown as Routine[],
-        overrides: data.overrides as unknown as Override[],
-      });
-    } catch { /* ignore */ }
-  }
-
-  function parseAssignees(input: string): string[] {
-    const text = input.trim();
-    if (!text || text.includes("@all")) return members.map((m) => m.id);
-    const names = text.match(/@([^\s,]+)/g)?.map((token) => token.slice(1)) ?? [];
-    const ids = members
-      .filter((m) => names.includes(m.name) || names.includes(m.id))
-      .map((m) => m.id);
-    return ids.length > 0 ? ids : members.map((m) => m.id);
-  }
-
-  function formatAssignees(ids?: string[]): string {
-    if (!ids || ids.length === 0 || ids.length === members.length) return "@all";
-    return ids
-      .map((id) => `@${members.find((m) => m.id === id)?.name ?? id}`)
-      .join(" ");
-  }
 
   useEffect(() => {
     setActionLogs([]);
@@ -441,33 +413,35 @@ export function MembersPage() {
         {selectedId && detail && (
           <div className="md:col-span-2 space-y-4">
             {/* Member header with avatar */}
-            <div className="flex items-center gap-4 bg-white rounded-xl border border-stone-200 p-4">
-              <div>
-                {detail.member.avatar ? (
-                  <img src={api.avatarUrl(detail.member.avatar)} alt={detail.member.name} className="w-16 h-16 rounded-full object-cover" />
-                ) : (
-                  <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 text-xl font-medium">
-                    {detail.member.name.charAt(0)}
-                  </div>
-                )}
+            <div className="flex items-center justify-between gap-4 bg-white rounded-xl border border-stone-200 p-4">
+              <div className="flex items-center gap-4 min-w-0">
+                <div>
+                  {detail.member.avatar ? (
+                    <img src={api.avatarUrl(detail.member.avatar)} alt={detail.member.name} className="w-16 h-16 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 text-xl font-medium">
+                      {detail.member.name.charAt(0)}
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-base font-semibold text-stone-800 truncate">{detail.member.name}</p>
+                  <p className="text-xs text-stone-400 truncate">{detail.member.role === "admin" ? "管理员" : "成员"} · {detail.member.id}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-base font-semibold text-stone-800">{detail.member.name}</p>
-                <p className="text-xs text-stone-400">{detail.member.role === "admin" ? "管理员" : "成员"} · {detail.member.id}</p>
-                <button
-                  onClick={openMemberEditDialog}
-                  className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
-                >
-                  编辑成员信息
-                </button>
-              </div>
+              <button
+                onClick={openMemberEditDialog}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
+              >
+                编辑
+              </button>
             </div>
             {/* Tabs */}
             <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
               {([
                 ["plan", "今日计划"],
                 ["routines", "7 days"],
-                ["overrides", "临时变动"],
+                ["overrides", "计划"],
                 ["profile", "成员档案"],
               ] as const).map(([key, label]) => (
                 <button
@@ -513,7 +487,7 @@ export function MembersPage() {
                             <span className={`text-xs px-1.5 py-0.5 rounded ${
                               item.source === "routine" ? "bg-amber-50 text-amber-600" : "bg-blue-50 text-blue-600"
                             }`}>
-                              {item.source === "routine" ? "7days" : "临时"}
+                              {item.source === "routine" || item.source === "family_routine" ? "7days" : "计划"}
                             </span>
                           </div>
                         </div>
@@ -648,7 +622,7 @@ export function MembersPage() {
                               <button
                                 onClick={() => {
                                   if (routine.assigneeMemberIds) {
-                                    setTab("familyPlans");
+                                    navigate("/admin/family");
                                     return;
                                   }
                                   const r = { ...routine };
@@ -676,7 +650,7 @@ export function MembersPage() {
                                   if (!routine.assigneeMemberIds) setDeletingRoutine(routine.id);
                                 }}
                                 className="p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                                title={routine.assigneeMemberIds ? "请在家庭计划 Tab 删除" : "删除"}
+                                title={routine.assigneeMemberIds ? "请在家庭页面删除" : "删除"}
                               >
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -768,7 +742,7 @@ export function MembersPage() {
                 <div className="bg-white rounded-xl border border-stone-200 p-6">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-medium text-stone-500">
-                      临时变动 · {detail.overrides.length} 项
+                      计划 · {detail.overrides.length} 项
                     </h3>
                     <button
                       onClick={() => {
@@ -780,14 +754,14 @@ export function MembersPage() {
                       }}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
                     >
-                      + 新增变动
+                      + 新增计划
                     </button>
                   </div>
 
                   {detail.overrides.length === 0 ? (
                     <div className="py-6 text-center space-y-2">
-                      <p className="text-sm text-stone-400">暂无临时变动</p>
-                      <p className="text-xs text-stone-400">可以跳过、新增或修改某段时间内的习惯安排</p>
+                      <p className="text-sm text-stone-400">暂无计划</p>
+                      <p className="text-xs text-stone-400">计划用于在某个时间段内执行特定内容，或调整既有 7 days</p>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -802,7 +776,7 @@ export function MembersPage() {
                           <div key={ovr.id} className="flex items-center gap-3 p-3 rounded-lg bg-stone-50 group">
                             <span className={`text-xs px-2 py-0.5 rounded font-medium ${a.color}`}>{a.text}</span>
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm text-stone-700">{ovr.title ?? ovr.reason ?? "临时变动"}</p>
+                              <p className="text-sm text-stone-700">{ovr.title ?? ovr.reason ?? "计划安排"}</p>
                               <div className="flex items-center gap-2 mt-0.5">
                                 <p className="text-xs text-stone-400">
                                   {ovr.date
@@ -830,7 +804,7 @@ export function MembersPage() {
                               <button
                                 onClick={() => {
                                   if (ovr.assigneeMemberIds) {
-                                    setTab("familyPlans");
+                                    navigate("/admin/family");
                                     return;
                                   }
                                   setEditingOverride({ ...ovr });
@@ -847,7 +821,7 @@ export function MembersPage() {
                                   if (!ovr.assigneeMemberIds) setDeletingOverride(ovr.id);
                                 }}
                                 className="p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-red-50 transition-colors cursor-pointer"
-                                title={ovr.assigneeMemberIds ? "请在家庭计划 Tab 删除" : "删除"}
+                                title={ovr.assigneeMemberIds ? "请在家庭页面删除" : "删除"}
                               >
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -863,129 +837,7 @@ export function MembersPage() {
               </div>
             )}
 
-            {/* Family plans tab */}
-            {tab === "familyPlans" && (
-              <div className="space-y-4">
-                <div className="bg-white rounded-xl border border-stone-200 p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-medium text-stone-500">
-                      家庭习惯 · {familyPlans.routines.length} 项
-                    </h3>
-                    <button
-                      onClick={() => {
-                        setAssigneeInput("@all");
-                        setEditingFamilyRoutine({
-                          id: `rtn_${Date.now().toString(36)}`,
-                          title: "",
-                          description: "",
-                          weekdays: [],
-                          reminders: [],
-                          actions: [],
-                          assigneeMemberIds: members.map((m) => m.id),
-                        });
-                      }}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
-                    >
-                      + 新增家庭习惯
-                    </button>
-                  </div>
-                  {familyPlans.routines.length === 0 ? (
-                    <p className="text-sm text-stone-400 py-4 text-center">暂无家庭习惯</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {familyPlans.routines.map((r) => (
-                        <div key={r.id} className="p-3 rounded-lg bg-stone-50 flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-medium text-stone-800">{r.title}</p>
-                            <p className="text-xs text-stone-500 mt-0.5">
-                              {formatAssignees(r.assigneeMemberIds)} · {formatWeekdays(r.weekdays)}{r.time ? ` · ${r.time}` : ""}
-                            </p>
-                          </div>
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => {
-                                setAssigneeInput(formatAssignees(r.assigneeMemberIds));
-                                setEditingFamilyRoutine({ ...r });
-                              }}
-                              className="px-2 py-1 text-xs rounded border border-stone-300 text-stone-600 hover:bg-stone-100"
-                            >
-                              编辑
-                            </button>
-                            <button
-                              onClick={async () => {
-                                await api.deleteFamilyRoutine(r.id);
-                                await loadFamilyPlans();
-                              }}
-                              className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50"
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="bg-white rounded-xl border border-stone-200 p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-medium text-stone-500">
-                      家庭临时变动 · {familyPlans.overrides.length} 项
-                    </h3>
-                    <button
-                      onClick={() => {
-                        setAssigneeInput("@all");
-                        setEditingFamilyOverride({
-                          id: `ovr_${Date.now().toString(36)}`,
-                          action: "add",
-                          date: new Date().toISOString().split("T")[0],
-                          assigneeMemberIds: members.map((m) => m.id),
-                        });
-                      }}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
-                    >
-                      + 新增家庭临时变动
-                    </button>
-                  </div>
-                  {familyPlans.overrides.length === 0 ? (
-                    <p className="text-sm text-stone-400 py-4 text-center">暂无家庭临时变动</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {familyPlans.overrides.map((o) => (
-                        <div key={o.id} className="p-3 rounded-lg bg-stone-50 flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-medium text-stone-800">{o.title ?? "家庭临时变动"}</p>
-                            <p className="text-xs text-stone-500 mt-0.5">
-                              {formatAssignees(o.assigneeMemberIds)} · {o.action} · {o.date ?? (o.dateRange ? `${o.dateRange.start}~${o.dateRange.end}` : "")}
-                            </p>
-                          </div>
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => {
-                                setAssigneeInput(formatAssignees(o.assigneeMemberIds));
-                                setEditingFamilyOverride({ ...o });
-                              }}
-                              className="px-2 py-1 text-xs rounded border border-stone-300 text-stone-600 hover:bg-stone-100"
-                            >
-                              编辑
-                            </button>
-                            <button
-                              onClick={async () => {
-                                await api.deleteFamilyOverride(o.id);
-                                await loadFamilyPlans();
-                              }}
-                              className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50"
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+            {/* 家庭项编辑统一在“家庭”页面处理 */}
 
             {/* Profile */}
             {tab === "profile" && (
@@ -1392,173 +1244,14 @@ export function MembersPage() {
         </div>
       )}
 
-      {/* Edit family routine dialog */}
-      {editingFamilyRoutine && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingFamilyRoutine(null)}>
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-stone-800 mb-4">家庭习惯</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">标题</label>
-                <input
-                  type="text"
-                  value={editingFamilyRoutine.title}
-                  onChange={(e) => setEditingFamilyRoutine({ ...editingFamilyRoutine, title: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">分配成员（支持 @all 或 @成员名）</label>
-                <input
-                  type="text"
-                  value={assigneeInput}
-                  onChange={(e) => setAssigneeInput(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">每周重复</label>
-                <div className="flex gap-1">
-                  {[0, 1, 2, 3, 4, 5, 6].map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => {
-                        const weekdays = editingFamilyRoutine.weekdays.includes(d)
-                          ? editingFamilyRoutine.weekdays.filter((x) => x !== d)
-                          : [...editingFamilyRoutine.weekdays, d].sort();
-                        setEditingFamilyRoutine({ ...editingFamilyRoutine, weekdays });
-                      }}
-                      className={`w-8 h-8 rounded-full text-xs ${editingFamilyRoutine.weekdays.includes(d) ? "bg-amber-500 text-white" : "bg-stone-100 text-stone-400"}`}
-                    >
-                      {WEEKDAY_NAMES[d]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">时间</label>
-                <input
-                  type="time"
-                  value={editingFamilyRoutine.time ?? ""}
-                  onChange={(e) => setEditingFamilyRoutine({ ...editingFamilyRoutine, time: e.target.value || undefined })}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">描述</label>
-                <textarea
-                  value={editingFamilyRoutine.description ?? ""}
-                  onChange={(e) => setEditingFamilyRoutine({ ...editingFamilyRoutine, description: e.target.value })}
-                  rows={3}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm resize-none"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 mt-5">
-              <button onClick={() => setEditingFamilyRoutine(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100">取消</button>
-              <button
-                onClick={async () => {
-                  const toSave = {
-                    ...editingFamilyRoutine,
-                    assigneeMemberIds: parseAssignees(assigneeInput),
-                  };
-                  await api.upsertFamilyRoutine(editingFamilyRoutine.id, toSave as unknown as Record<string, unknown>);
-                  setEditingFamilyRoutine(null);
-                  await loadFamilyPlans();
-                  if (selectedId) await refreshMemberDetail(selectedId);
-                }}
-                className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600"
-              >
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 家庭项编辑统一在“家庭”页面处理 */}
 
-      {/* Edit family override dialog */}
-      {editingFamilyOverride && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingFamilyOverride(null)}>
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-stone-800 mb-4">家庭临时变动</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">分配成员（支持 @all 或 @成员名）</label>
-                <input
-                  type="text"
-                  value={assigneeInput}
-                  onChange={(e) => setAssigneeInput(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">变动类型</label>
-                <select
-                  value={editingFamilyOverride.action}
-                  onChange={(e) => setEditingFamilyOverride({ ...editingFamilyOverride, action: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm"
-                >
-                  <option value="skip">跳过</option>
-                  <option value="add">新增</option>
-                  <option value="modify">修改</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">日期</label>
-                <input
-                  type="date"
-                  value={editingFamilyOverride.date ?? ""}
-                  onChange={(e) => setEditingFamilyOverride({ ...editingFamilyOverride, date: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">标题</label>
-                <input
-                  type="text"
-                  value={editingFamilyOverride.title ?? ""}
-                  onChange={(e) => setEditingFamilyOverride({ ...editingFamilyOverride, title: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">原因</label>
-                <input
-                  type="text"
-                  value={editingFamilyOverride.reason ?? ""}
-                  onChange={(e) => setEditingFamilyOverride({ ...editingFamilyOverride, reason: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 mt-5">
-              <button onClick={() => setEditingFamilyOverride(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100">取消</button>
-              <button
-                onClick={async () => {
-                  const toSave = {
-                    ...editingFamilyOverride,
-                    assigneeMemberIds: parseAssignees(assigneeInput),
-                  };
-                  await api.upsertFamilyOverride(editingFamilyOverride.id, toSave as unknown as Record<string, unknown>);
-                  setEditingFamilyOverride(null);
-                  await loadFamilyPlans();
-                  if (selectedId) await refreshMemberDetail(selectedId);
-                }}
-                className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600"
-              >
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete override confirmation dialog */}
+      {/* Delete plan confirmation dialog */}
       {deletingOverride && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setDeletingOverride(null)}>
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-stone-800 mb-2">删除临时变动</h3>
-            <p className="text-sm text-stone-500 mb-6">确定要删除这条临时变动吗？</p>
+            <h3 className="text-lg font-semibold text-stone-800 mb-2">删除计划</h3>
+            <p className="text-sm text-stone-500 mb-6">确定要删除这条计划吗？</p>
             <div className="flex justify-end gap-3">
               <button onClick={() => setDeletingOverride(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors">取消</button>
               <button onClick={() => deleteOverride(deletingOverride)} className="px-4 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-colors">删除</button>
@@ -1567,24 +1260,24 @@ export function MembersPage() {
         </div>
       )}
 
-      {/* Edit override dialog */}
+      {/* Edit plan dialog */}
       {editingOverride && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingOverride(null)}>
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-stone-800 mb-4">
-              {detail?.overrides.some((o) => o.id === editingOverride.id) ? "编辑临时变动" : "新增临时变动"}
+              {detail?.overrides.some((o) => o.id === editingOverride.id) ? "编辑计划" : "新增计划"}
             </h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">变动类型</label>
+                <label className="block text-xs font-medium text-stone-500 mb-1">计划类型</label>
                 <select
                   value={editingOverride.action}
                   onChange={(e) => setEditingOverride({ ...editingOverride, action: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                 >
-                  <option value="skip">跳过（不执行某习惯）</option>
-                  <option value="add">新增（临时添加活动）</option>
-                  <option value="modify">修改（替换习惯内容）</option>
+                  <option value="skip">暂停（跳过某段时间内的习惯）</option>
+                  <option value="add">新增（在时间段内执行内容）</option>
+                  <option value="modify">调整（替换原习惯执行内容）</option>
                 </select>
               </div>
 
@@ -1652,6 +1345,27 @@ export function MembersPage() {
                 )}
               </div>
 
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-1">开始时间</label>
+                  <input
+                    type="time"
+                    value={editingOverride.startTime ?? editingOverride.time ?? ""}
+                    onChange={(e) => setEditingOverride({ ...editingOverride, startTime: e.target.value || undefined, time: e.target.value || undefined })}
+                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-1">结束时间</label>
+                  <input
+                    type="time"
+                    value={editingOverride.endTime ?? ""}
+                    onChange={(e) => setEditingOverride({ ...editingOverride, endTime: e.target.value || undefined })}
+                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-medium text-stone-500 mb-1">时段（可选）</label>
                 <select
@@ -1686,12 +1400,12 @@ export function MembersPage() {
 
               {editingOverride.action !== "skip" && (
                 <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-1">活动名称</label>
+                  <label className="block text-xs font-medium text-stone-500 mb-1">计划内容</label>
                   <input
                     type="text"
                     value={editingOverride.title ?? ""}
                     onChange={(e) => setEditingOverride({ ...editingOverride, title: e.target.value })}
-                    placeholder="如：出差、旅行、休息日"
+                    placeholder="如：出差、团建、去医院复查"
                     className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                   />
                 </div>

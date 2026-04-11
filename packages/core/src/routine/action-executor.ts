@@ -98,8 +98,9 @@ export class ActionExecutor {
     const minuteKey = `${y}-${mo}-${d}T${nowHH}:${nowMM}`;
 
     const members = this.familyManager.getMembers();
+    const currentDate = new Date(`${y}-${mo}-${d}T${nowHH}:${nowMM}:00`);
     for (const member of members) {
-      const routines = this.routineEngine.getRoutines(member.id);
+      const routines = this.routineEngine.resolveEffectiveRoutines(member.id, currentDate);
       for (const routine of routines) {
         if (!routine.weekdays.includes(weekday)) continue;
         const effectiveTime = this.resolveTime(routine);

@@ -1,6 +1,6 @@
 import yaml from "js-yaml";
 import { formatDate, generateId } from "@nichijou/shared";
-import type { Routine, Override, DayPlan, DayPlanItem, ReminderRule } from "@nichijou/shared";
+import type { Routine, Plan, DayPlan, DayPlanItem, ReminderRule } from "@nichijou/shared";
 import type { StorageManager } from "../storage/storage.js";
 
 export class RoutineEngine {
@@ -77,91 +77,116 @@ export class RoutineEngine {
     }
   }
 
-  getOverrides(memberId: string): Override[] {
-    const own = this.getOwnOverrides(memberId);
-    const shared = this.getSharedOverrides()
+  getPlans(memberId: string): Plan[] {
+    const own = this.getOwnPlans(memberId);
+    const shared = this.getSharedPlans()
       .filter((o) => this.isAssignedToMember(o.assigneeMemberIds, memberId));
     return [...own, ...shared];
   }
 
-  getOwnOverrides(memberId: string): Override[] {
-    const content = this.storage.readText(`family/members/${memberId}.overrides.yaml`);
+  getOwnPlans(memberId: string): Plan[] {
+    const content = this.storage.readText(`family/members/${memberId}.plans.yaml`)
+      ?? this.storage.readText(`family/members/${memberId}.overrides.yaml`);
     if (!content) return [];
-    const data = yaml.load(content) as { overrides?: Override[] };
-    return data?.overrides ?? [];
+    const data = yaml.load(content) as { plans?: Plan[]; overrides?: Plan[] };
+    return data?.plans ?? data?.overrides ?? [];
   }
 
-  getSharedOverrides(): Override[] {
-    const content = this.storage.readText("family/shared-overrides.yaml");
+  getSharedPlans(): Plan[] {
+    const content = this.storage.readText("family/shared-plans.yaml")
+      ?? this.storage.readText("family/shared-overrides.yaml");
     if (!content) return [];
-    const data = yaml.load(content) as { overrides?: Override[] };
-    return data?.overrides ?? [];
+    const data = yaml.load(content) as { plans?: Plan[]; overrides?: Plan[] };
+    return data?.plans ?? data?.overrides ?? [];
   }
 
-  addOverride(memberId: string, override: Override): void {
-    const overrides = this.getOwnOverrides(memberId);
-    overrides.push({ ...override, id: override.id || generateId("ovr") });
-    this.saveOverrides(memberId, overrides);
+  addPlan(memberId: string, plan: Plan): void {
+    const plans = this.getOwnPlans(memberId);
+    plans.push({ ...plan, id: plan.id || generateId("pln") });
+    this.savePlans(memberId, plans);
   }
 
-  addSharedOverride(override: Override): void {
-    const overrides = this.getSharedOverrides();
-    overrides.push({ ...override, id: override.id || generateId("ovr") });
-    this.saveSharedOverrides(overrides);
+  addSharedPlan(plan: Plan): void {
+    const plans = this.getSharedPlans();
+    plans.push({ ...plan, id: plan.id || generateId("pln") });
+    this.saveSharedPlans(plans);
   }
 
-  updateOverride(memberId: string, overrideId: string, data: Partial<Override>): void {
-    const overrides = this.getOwnOverrides(memberId);
-    const idx = overrides.findIndex((o) => o.id === overrideId);
+  updatePlan(memberId: string, planId: string, data: Partial<Plan>): void {
+    const plans = this.getOwnPlans(memberId);
+    const idx = plans.findIndex((o) => o.id === planId);
     if (idx === -1) {
-      this.addOverride(memberId, { ...data, id: overrideId } as Override);
+      this.addPlan(memberId, { ...data, id: planId } as Plan);
       return;
     }
-    overrides[idx] = { ...overrides[idx]!, ...data, id: overrideId };
-    this.saveOverrides(memberId, overrides);
+    plans[idx] = { ...plans[idx]!, ...data, id: planId };
+    this.savePlans(memberId, plans);
   }
 
-  updateSharedOverride(overrideId: string, data: Partial<Override>): void {
-    const overrides = this.getSharedOverrides();
-    const idx = overrides.findIndex((o) => o.id === overrideId);
+  updateSharedPlan(planId: string, data: Partial<Plan>): void {
+    const plans = this.getSharedPlans();
+    const idx = plans.findIndex((o) => o.id === planId);
     if (idx === -1) {
-      this.addSharedOverride({ ...data, id: overrideId } as Override);
+      this.addSharedPlan({ ...data, id: planId } as Plan);
       return;
     }
-    overrides[idx] = { ...overrides[idx]!, ...data, id: overrideId };
-    this.saveSharedOverrides(overrides);
+    plans[idx] = { ...plans[idx]!, ...data, id: planId };
+    this.saveSharedPlans(plans);
   }
 
-  removeOverride(memberId: string, overrideId: string): boolean {
-    const overrides = this.getOwnOverrides(memberId);
-    const filtered = overrides.filter((o) => o.id !== overrideId);
-    if (filtered.length === overrides.length) return false;
-    this.saveOverrides(memberId, filtered);
+  removePlan(memberId: string, planId: string): boolean {
+    const plans = this.getOwnPlans(memberId);
+    const filtered = plans.filter((o) => o.id !== planId);
+    if (filtered.length === plans.length) return false;
+    this.savePlans(memberId, filtered);
     return true;
   }
 
-  removeSharedOverride(overrideId: string): boolean {
-    const overrides = this.getSharedOverrides();
-    const filtered = overrides.filter((o) => o.id !== overrideId);
-    if (filtered.length === overrides.length) return false;
-    this.saveSharedOverrides(filtered);
+  removeSharedPlan(planId: string): boolean {
+    const plans = this.getSharedPlans();
+    const filtered = plans.filter((o) => o.id !== planId);
+    if (filtered.length === plans.length) return false;
+    this.saveSharedPlans(filtered);
     return true;
   }
 
-  resolveDayPlan(memberId: string, date: Date): DayPlan {
+  // Backward compatibility wrappers
+  getOverrides(memberId: string): Plan[] { return this.getPlans(memberId); }
+  getOwnOverrides(memberId: string): Plan[] { return this.getOwnPlans(memberId); }
+  getSharedOverrides(): Plan[] { return this.getSharedPlans(); }
+  addOverride(memberId: string, override: Plan): void { this.addPlan(memberId, override); }
+  addSharedOverride(override: Plan): void { this.addSharedPlan(override); }
+  updateOverride(memberId: string, overrideId: string, data: Partial<Plan>): void { this.updatePlan(memberId, overrideId, data); }
+  updateSharedOverride(overrideId: string, data: Partial<Plan>): void { this.updateSharedPlan(overrideId, data); }
+  removeOverride(memberId: string, overrideId: string): boolean { return this.removePlan(memberId, overrideId); }
+  removeSharedOverride(overrideId: string): boolean { return this.removeSharedPlan(overrideId); }
+
+  resolveEffectiveRoutines(memberId: string, date: Date): Routine[] {
     const weekday = date.getDay();
     const dateStr = formatDate(date);
     const routines = this.getRoutines(memberId);
-    const overrides = this.getOverrides(memberId);
+    const plans = this.getPlans(memberId);
 
     const activeRoutines = routines
       .filter((r) => r.weekdays.includes(weekday))
-      .filter((r) => !this.isSkipped(r.id, dateStr, overrides))
-      .map((r) => this.applyModifications(r, dateStr, overrides));
+      .filter((r) => !this.isSkipped(r, dateStr, plans))
+      .map((r) => this.applyModifications(r, dateStr, plans));
 
-    const additions = overrides
+    const additions = plans
+      .filter((p) => this.matchesDate(p, dateStr) && p.action === "add")
+      .map((p) => this.planToRoutine(p, weekday));
+
+    return [...activeRoutines, ...additions].filter((r) => !r.archived);
+  }
+
+  resolveDayPlan(memberId: string, date: Date): DayPlan {
+    const dateStr = formatDate(date);
+    const plans = this.getPlans(memberId);
+    const activeRoutines = this.resolveEffectiveRoutines(memberId, date)
+      .filter((r) => !r.id.startsWith("plan_"));
+    const additions = plans
       .filter((o) => this.matchesDate(o, dateStr) && o.action === "add")
-      .map((o) => this.overrideToItem(o));
+      .map((o) => this.planToItem(o));
 
     const items: DayPlanItem[] = [
       ...activeRoutines.map((r) => this.routineToItem(r)),
@@ -172,7 +197,7 @@ export class RoutineEngine {
   }
 
   cleanExpiredOverrides(memberId: string): number {
-    const overrides = this.getOwnOverrides(memberId);
+    const overrides = this.getOwnPlans(memberId);
     const today = formatDate(new Date());
     const active = overrides.filter((o) => {
       if (o.dateRange) return o.dateRange.end >= today;
@@ -180,32 +205,40 @@ export class RoutineEngine {
       return true;
     });
     const removed = overrides.length - active.length;
-    if (removed > 0) this.saveOverrides(memberId, active);
+    if (removed > 0) this.savePlans(memberId, active);
     return removed;
   }
 
-  private isSkipped(routineId: string, dateStr: string, overrides: Override[]): boolean {
-    return overrides.some(
-      (o) => o.routineId === routineId && o.action === "skip" && this.matchesDate(o, dateStr),
-    );
+  private isSkipped(routine: Routine, dateStr: string, plans: Plan[]): boolean {
+    return plans.some((p) => {
+      if (p.action !== "skip" || !this.matchesDate(p, dateStr)) return false;
+      if (p.routineId && p.routineId !== routine.id) return false;
+      return this.matchesPlanTimeWindow(this.resolveRoutineTime(routine), p);
+    });
   }
 
-  private applyModifications(routine: Routine, dateStr: string, overrides: Override[]): Routine {
-    const mod = overrides.find(
-      (o) => o.routineId === routine.id && o.action === "modify" && this.matchesDate(o, dateStr),
+  private applyModifications(routine: Routine, dateStr: string, plans: Plan[]): Routine {
+    const mod = plans.find(
+      (p) => p.action === "modify"
+        && this.matchesDate(p, dateStr)
+        && (!p.routineId || p.routineId === routine.id)
+        && this.matchesPlanTimeWindow(this.resolveRoutineTime(routine), p),
     );
     if (!mod) return routine;
     return {
       ...routine,
+      title: mod.title ?? routine.title,
+      time: mod.time ?? mod.startTime ?? routine.time,
       timeSlot: (mod.timeSlot as Routine["timeSlot"]) ?? routine.timeSlot,
+      actions: mod.actions ?? routine.actions,
       reminders: mod.reminders ?? routine.reminders,
     };
   }
 
-  private matchesDate(override: Override, dateStr: string): boolean {
-    if (override.date) return override.date === dateStr;
-    if (override.dateRange) {
-      return dateStr >= override.dateRange.start && dateStr <= override.dateRange.end;
+  private matchesDate(plan: Plan, dateStr: string): boolean {
+    if (plan.date) return plan.date === dateStr;
+    if (plan.dateRange) {
+      return dateStr >= plan.dateRange.start && dateStr <= plan.dateRange.end;
     }
     return false;
   }
@@ -222,13 +255,28 @@ export class RoutineEngine {
     };
   }
 
-  private overrideToItem(o: Override): DayPlanItem {
+  private planToItem(o: Plan): DayPlanItem {
     return {
       id: o.id,
-      title: o.title ?? "临时安排",
+      title: o.title ?? "计划安排",
+      time: o.time ?? o.startTime,
       timeSlot: o.timeSlot,
-      source: o.assigneeMemberIds ? "family_override" : "override",
+      source: o.assigneeMemberIds ? "family_plan" : "plan",
       reminders: o.reminders ?? [],
+    };
+  }
+
+  private planToRoutine(plan: Plan, weekday: number): Routine {
+    return {
+      id: `plan_${plan.id}`,
+      title: plan.title ?? "计划安排",
+      description: plan.reason,
+      assigneeMemberIds: plan.assigneeMemberIds,
+      weekdays: [weekday],
+      time: plan.time ?? plan.startTime,
+      timeSlot: plan.timeSlot as Routine["timeSlot"] | undefined,
+      reminders: plan.reminders ?? [],
+      actions: plan.actions,
     };
   }
 
@@ -239,10 +287,15 @@ export class RoutineEngine {
     );
   }
 
-  private saveOverrides(memberId: string, overrides: Override[]): void {
+  private savePlans(memberId: string, plans: Plan[]): void {
+    this.storage.writeText(
+      `family/members/${memberId}.plans.yaml`,
+      yaml.dump({ plans }),
+    );
+    // legacy file for compatibility with old clients
     this.storage.writeText(
       `family/members/${memberId}.overrides.yaml`,
-      yaml.dump({ overrides }),
+      yaml.dump({ overrides: plans }),
     );
   }
 
@@ -253,11 +306,30 @@ export class RoutineEngine {
     );
   }
 
-  private saveSharedOverrides(overrides: Override[]): void {
+  private saveSharedPlans(plans: Plan[]): void {
+    this.storage.writeText(
+      "family/shared-plans.yaml",
+      yaml.dump({ plans }),
+    );
     this.storage.writeText(
       "family/shared-overrides.yaml",
-      yaml.dump({ overrides }),
+      yaml.dump({ overrides: plans }),
     );
+  }
+
+  private resolveRoutineTime(routine: Routine): string | null {
+    if (routine.time) return routine.time;
+    if (routine.timeSlot === "morning") return "08:00";
+    if (routine.timeSlot === "afternoon") return "14:00";
+    if (routine.timeSlot === "evening") return "20:00";
+    return null;
+  }
+
+  private matchesPlanTimeWindow(routineTime: string | null, plan: Plan): boolean {
+    const start = plan.startTime;
+    const end = plan.endTime;
+    if (!start || !end || !routineTime) return true;
+    return routineTime >= start && routineTime <= end;
   }
 
   private isAssignedToMember(assigneeMemberIds: string[] | undefined, memberId: string): boolean {

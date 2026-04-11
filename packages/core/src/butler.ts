@@ -2,7 +2,7 @@ import { createProvider } from "@nichijou/ai";
 import type { LLMProvider } from "@nichijou/ai";
 import { AgentSession, createAgentSession } from "@nichijou/agent";
 import type { AgentEvent } from "@nichijou/agent";
-import type { FamilyMember, InboundMessage, ToolDefinition, Routine } from "@nichijou/shared";
+import type { FamilyMember, InboundMessage, ToolDefinition, Routine, Plan } from "@nichijou/shared";
 import { hostname, platform, arch, cpus, totalmem, freemem, uptime as osUptime, loadavg } from "node:os";
 import type { Channel } from "./gateway/channel.js";
 import type { ChannelStatus } from "@nichijou/shared";
@@ -966,6 +966,69 @@ export class ButlerService {
     }
 
     return { routine, warnings };
+  }
+
+  async parsePlanDescription(memberId: string, description: string): Promise<{ plan: Plan; warnings: string[] }> {
+    const member = this.familyManager.getMember(memberId);
+    const { display, iso } = this.formatNow();
+
+    const systemPrompt = [
+      "你是家庭管家的计划解析器。把自然语言描述解析为单个计划 JSON。",
+      `当前时间: ${display} (${iso})`,
+      member ? `当前成员: ${member.name}` : "",
+      "",
+      "# 输出格式",
+      JSON.stringify({
+        title: "计划标题",
+        action: "add",
+        date: "YYYY-MM-DD",
+        dateRange: { start: "YYYY-MM-DD", end: "YYYY-MM-DD" },
+        startTime: "HH:MM",
+        endTime: "HH:MM",
+        timeSlot: "morning",
+        reason: "简短备注",
+        warnings: ["无法确定时间时给出说明"],
+      }, null, 2),
+      "",
+      "# 规则",
+      "1. action 仅能是 skip/add/modify 之一，默认 add",
+      "2. date 与 dateRange 二选一；无法确定时优先给 date=今天",
+      "3. startTime/endTime 使用 24 小时 HH:MM；无法确定可省略",
+      "4. timeSlot 仅 morning/afternoon/evening，可省略",
+      "5. title 必填，简洁准确",
+      "6. 只返回 JSON，不要有其他文本",
+    ].filter(Boolean).join("\n");
+
+    const provider = this.getProvider();
+    const result = await provider.chat({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: description },
+      ],
+      maxTokens: 1200,
+    });
+    this.logProviderUsage(memberId, result.usage);
+
+    const text = result.message.content.trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("AI 未能返回有效的 JSON 格式");
+    const parsed = JSON.parse(jsonMatch[0]) as Plan & { warnings?: string[] };
+
+    const today = iso.slice(0, 10);
+    const plan: Plan = {
+      id: `pln_${Date.now().toString(36)}`,
+      action: (parsed.action as Plan["action"]) ?? "add",
+      title: parsed.title || description.slice(0, 20),
+      reason: parsed.reason,
+      date: parsed.date ?? (parsed.dateRange ? undefined : today),
+      dateRange: parsed.dateRange,
+      startTime: parsed.startTime,
+      endTime: parsed.endTime,
+      time: parsed.startTime ?? parsed.time,
+      timeSlot: parsed.timeSlot,
+    };
+
+    return { plan, warnings: parsed.warnings ?? [] };
   }
 
   applyRoutines(memberId: string, routines: Routine[]): void {

@@ -18,6 +18,7 @@ export interface NichijouConfig {
   port: number;
   timezone: string;
   setupCompleted: boolean;
+  butlerName?: string;
   location?: LocationConfig;
   plugins?: string[];
 }
@@ -31,6 +32,7 @@ const DEFAULT_CONFIG: NichijouConfig = {
   port: 3000,
   timezone: "Asia/Shanghai",
   setupCompleted: false,
+  butlerName: "Nichijou",
 };
 
 export class ConfigManager {

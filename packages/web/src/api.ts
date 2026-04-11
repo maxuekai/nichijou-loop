@@ -47,9 +47,9 @@ export const api = {
     request<{ response: string }>("/chat", { method: "POST", body: JSON.stringify({ memberId, message }) }),
 
   getRoutines: (memberId: string) =>
-    request<{ routines: unknown[]; overrides: unknown[] }>(`/routines/${memberId}`),
+    request<{ routines: unknown[]; plans: unknown[]; overrides?: unknown[] }>(`/routines/${memberId}`),
   getFamilyPlans: () =>
-    request<{ routines: unknown[]; overrides: unknown[] }>("/family/plans"),
+    request<{ routines: unknown[]; plans: unknown[]; overrides?: unknown[] }>("/family/plans"),
   upsertFamilyRoutine: (routineId: string, data: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/family/routines/${routineId}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteFamilyRoutine: (routineId: string) =>
@@ -58,6 +58,14 @@ export const api = {
     request<{ ok: boolean }>(`/family/overrides/${overrideId}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteFamilyOverride: (overrideId: string) =>
     request<{ ok: boolean }>(`/family/overrides/${overrideId}`, { method: "DELETE" }),
+  upsertPlan: (memberId: string, planId: string, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/plans/${memberId}/${planId}`, { method: "PUT", body: JSON.stringify(data) }),
+  deletePlan: (memberId: string, planId: string) =>
+    request<{ ok: boolean }>(`/plans/${memberId}/${planId}`, { method: "DELETE" }),
+  upsertFamilyPlan: (planId: string, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/family/plans/${planId}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteFamilyPlan: (planId: string) =>
+    request<{ ok: boolean }>(`/family/plans/${planId}`, { method: "DELETE" }),
   getDayPlan: (memberId: string) =>
     request<{ date: string; memberId: string; items: Array<{ title: string; timeSlot?: string }> }>(`/day-plan/${memberId}`),
 
@@ -136,6 +144,11 @@ export const api = {
   parseRoutine: (memberId: string, description: string) =>
     request<{ ok: boolean; routine?: Record<string, unknown>; warnings?: string[]; error?: string }>(
       "/routines/parse",
+      { method: "POST", body: JSON.stringify({ memberId, description }) },
+    ),
+  parsePlan: (memberId: string, description: string) =>
+    request<{ ok: boolean; plan?: Record<string, unknown>; warnings?: string[]; error?: string }>(
+      "/plans/parse",
       { method: "POST", body: JSON.stringify({ memberId, description }) },
     ),
 
