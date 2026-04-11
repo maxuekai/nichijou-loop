@@ -200,4 +200,14 @@ export class ActionExecutor {
 
     this.db.logActionExecution(memberId, routine.id, action.id, result, success, minuteKey);
   }
+
+  async triggerRoutineNow(memberId: string, routine: Routine): Promise<number> {
+    const actions = this.resolveActions(routine);
+    const triggerKeyPrefix = `manual_${new Date().toISOString()}_${routine.id}`;
+    for (let i = 0; i < actions.length; i += 1) {
+      const action = actions[i]!;
+      await this.executeAction(memberId, routine, action, `${triggerKeyPrefix}_${i}`);
+    }
+    return actions.length;
+  }
 }

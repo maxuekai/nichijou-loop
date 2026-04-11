@@ -156,6 +156,11 @@ export const api = {
     request<Array<{ id: number; memberId: string; routineId: string; actionId: string; result: string; success: boolean; executedAt: string }>>(
       `/action-logs/${memberId}?limit=${limit}`,
     ),
+  triggerRoutine: (memberId: string, routineId: string) =>
+    request<{ ok: boolean; executedActions?: number; error?: string }>(
+      `/members/${memberId}/routines/${routineId}/trigger`,
+      { method: "POST" },
+    ),
 
   // --- Plugins ---
 

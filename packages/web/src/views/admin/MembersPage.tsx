@@ -103,6 +103,7 @@ export function MembersPage() {
   // Action execution logs
   const [actionLogs, setActionLogs] = useState<Array<{ id: number; routineId: string; actionId: string; result: string; success: boolean; executedAt: string }>>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
+  const [triggeringRoutineId, setTriggeringRoutineId] = useState<string | null>(null);
 
   // Generate routines from profile
   const [generating, setGenerating] = useState(false);
@@ -243,6 +244,25 @@ export function MembersPage() {
       await refreshMemberDetail(selectedId);
     } catch (err) {
       setPageError(err instanceof Error ? err.message : "删除习惯失败");
+    }
+  }
+
+  async function triggerRoutineNow(routineId: string) {
+    if (!selectedId) return;
+    setTriggeringRoutineId(routineId);
+    try {
+      setPageError(null);
+      const res = await api.triggerRoutine(selectedId, routineId);
+      if (!res.ok) {
+        setPageError(res.error ?? "立即触发失败");
+        return;
+      }
+      setLogsExpanded(true);
+      await loadActionLogs();
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "立即触发失败");
+    } finally {
+      setTriggeringRoutineId(null);
     }
   }
 
@@ -669,6 +689,14 @@ export function MembersPage() {
                               </div>
                             </div>
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() => { void triggerRoutineNow(routine.id); }}
+                                disabled={triggeringRoutineId === routine.id}
+                                className="px-2 py-1 rounded-md text-xs text-emerald-600 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+                                title="立即触发测试"
+                              >
+                                {triggeringRoutineId === routine.id ? "触发中…" : "立即触发"}
+                              </button>
                               <button
                                 onClick={() => {
                                   if (routine.assigneeMemberIds) {

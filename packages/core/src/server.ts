@@ -398,6 +398,30 @@ export class NichijouServer {
         return;
       }
 
+      if (path.match(/^\/api\/members\/[^/]+\/routines\/[^/]+\/trigger$/) && method === "POST") {
+        const parts = path.split("/");
+        const memberId = parts[3]!;
+        const routineId = parts[5]!;
+        try {
+          const member = this.butler.familyManager.getMember(memberId);
+          if (!member) {
+            this.json(res, { ok: false, error: "成员不存在" });
+            return;
+          }
+          const routine = this.butler.routineEngine.getRoutines(memberId).find((r) => r.id === routineId);
+          if (!routine) {
+            this.json(res, { ok: false, error: "习惯不存在" });
+            return;
+          }
+          const executedActions = await this.butler.actionExecutor.triggerRoutineNow(memberId, routine);
+          this.json(res, { ok: true, executedActions });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.json(res, { ok: false, error: msg });
+        }
+        return;
+      }
+
       if (path === "/api/routines/parse" && method === "POST") {
         try {
           const body = await this.readBody(req) as { memberId: string; description: string };
