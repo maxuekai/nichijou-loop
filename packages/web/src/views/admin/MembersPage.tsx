@@ -88,6 +88,12 @@ export function MembersPage() {
   const [deletingRoutine, setDeletingRoutine] = useState<string | null>(null);
   const [pluginTools, setPluginTools] = useState<PluginToolInfo[]>([]);
 
+  // AI routine parsing
+  const [showAiInput, setShowAiInput] = useState(false);
+  const [aiDescription, setAiDescription] = useState("");
+  const [aiParsing, setAiParsing] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
   // Generate routines from profile
   const [generating, setGenerating] = useState(false);
   const [generatedRoutines, setGeneratedRoutines] = useState<Routine[] | null>(null);
@@ -311,6 +317,26 @@ export function MembersPage() {
     setApplyingGen(false);
   }
 
+  async function parseWithAi() {
+    if (!selectedId || !aiDescription.trim() || aiParsing) return;
+    setAiParsing(true);
+    setAiError(null);
+    try {
+      const res = await api.parseRoutine(selectedId, aiDescription.trim());
+      if (res.ok && res.routine) {
+        const r = res.routine as unknown as Routine;
+        setEditingRoutine(r);
+        setShowAiInput(false);
+        setAiDescription("");
+      } else {
+        setAiError(res.error ?? "解析失败，请重试");
+      }
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "请求失败");
+    }
+    setAiParsing(false);
+  }
+
   function formatWeekdays(weekdays: number[]): string {
     return weekdays.map((d) => `周${WEEKDAY_NAMES[d]}`).join("、");
   }
@@ -499,33 +525,87 @@ export function MembersPage() {
                     </h3>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => {
-                          setEditingRoutine({
-                            id: `rtn_${Date.now().toString(36)}`,
-                            title: "",
-                            weekdays: [],
-                            reminders: [],
-                            actions: [],
-                          });
-                        }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 transition-colors cursor-pointer"
+                        onClick={() => { setShowAiInput(true); setAiDescription(""); setAiError(null); }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
                       >
                         + 新增习惯
                       </button>
                       <button
                         onClick={() => { setTab("profile"); startInterview(); }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-500 bg-stone-100 hover:bg-stone-200 transition-colors cursor-pointer"
                       >
                         AI 引导填写
                       </button>
                     </div>
                   </div>
 
+                  {/* AI smart input */}
+                  {showAiInput && (
+                    <div className="mb-4 p-4 rounded-lg border border-amber-200 bg-amber-50/30 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-medium text-stone-600">描述你的习惯，AI 会自动解析为结构化内容</p>
+                        <button
+                          onClick={() => setShowAiInput(false)}
+                          className="p-1 rounded text-stone-400 hover:text-stone-600 transition-colors"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                      <textarea
+                        value={aiDescription}
+                        onChange={(e) => setAiDescription(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) parseWithAi();
+                        }}
+                        placeholder={"例如：\n• 周一三五晚上7点去健身，提前半小时提醒带装备\n• 每天早上8点吃早餐，查一下当天天气\n• 每周日下午做一次大扫除"}
+                        rows={3}
+                        className="w-full px-3 py-2 rounded-lg border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
+                        disabled={aiParsing}
+                      />
+                      {aiError && (
+                        <p className="text-xs text-red-500">{aiError}</p>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <button
+                          onClick={() => {
+                            setShowAiInput(false);
+                            setEditingRoutine({
+                              id: `rtn_${Date.now().toString(36)}`,
+                              title: "",
+                              weekdays: [],
+                              reminders: [],
+                              actions: [],
+                            });
+                          }}
+                          className="text-xs text-stone-400 hover:text-stone-600 transition-colors"
+                        >
+                          手动创建
+                        </button>
+                        <button
+                          onClick={parseWithAi}
+                          disabled={!aiDescription.trim() || aiParsing}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                        >
+                          {aiParsing ? (
+                            <>
+                              <span className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" />
+                              AI 解析中…
+                            </>
+                          ) : (
+                            "AI 解析"
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {detail.routines.length === 0 ? (
                     <div className="py-6 text-center space-y-3">
                       <p className="text-sm text-stone-400">暂无习惯</p>
                       <p className="text-xs text-stone-400">
-                        新成员可通过微信扫码后自动引导填写，或点击上方「AI 引导填写」
+                        点击「+ 新增习惯」用自然语言描述，AI 帮你创建
                       </p>
                     </div>
                   ) : (

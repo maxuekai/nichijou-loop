@@ -347,6 +347,22 @@ export class NichijouServer {
         return;
       }
 
+      if (path === "/api/routines/parse" && method === "POST") {
+        try {
+          const body = await this.readBody(req) as { memberId: string; description: string };
+          if (!body.memberId || !body.description) {
+            this.json(res, { ok: false, error: "memberId 和 description 为必填" });
+            return;
+          }
+          const routine = await this.butler.parseRoutineDescription(body.memberId, body.description);
+          this.json(res, { ok: true, routine });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.json(res, { ok: false, error: msg });
+        }
+        return;
+      }
+
       if (path.startsWith("/api/routines/") && method === "GET") {
         const memberId = path.split("/")[3]!;
         const routines = this.butler.routineEngine.getRoutines(memberId);

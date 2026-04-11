@@ -71,7 +71,14 @@ export class ActionExecutor {
         message: r.message,
       }));
     }
-    return [];
+    return [{
+      id: `default_notify_${routine.id}`,
+      type: "notify" as const,
+      trigger: "at" as const,
+      offsetMinutes: 0,
+      channel: "wechat" as const,
+      message: routine.title,
+    }];
   }
 
   private async tick(): Promise<void> {

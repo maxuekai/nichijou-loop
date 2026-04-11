@@ -850,6 +850,118 @@ export class ButlerService {
     }
   }
 
+  async parseRoutineDescription(memberId: string, description: string): Promise<Routine> {
+    const member = this.familyManager.getMember(memberId);
+    const existing = this.routineEngine.getRoutines(memberId);
+    const { display, iso } = this.formatNow();
+
+    const pluginTools = this.pluginHost.getAvailableTools();
+    const toolsDesc = pluginTools.length > 0
+      ? pluginTools.map((t) => `  - ${t.toolName}（${t.pluginName}）: ${t.description}`).join("\n")
+      : "  （暂无已安装插件）";
+
+    const systemPrompt = [
+      "你是一个家庭 AI 管家的习惯解析器。用户会用自然语言描述一个生活习惯，你需要将其解析为结构化 JSON。",
+      "",
+      `当前时间: ${display} (${iso})`,
+      member ? `当前成员: ${member.name}` : "",
+      "",
+      existing.length > 0 ? `已有习惯（避免重复）:\n${existing.map((r) => `- ${r.title} (${r.weekdays.map((d) => ["日","一","二","三","四","五","六"][d]).join("、")}${r.time ? " " + r.time : ""})`).join("\n")}` : "",
+      "",
+      "# 可用的插件工具（ai_task 类型的 action 在运行时可以调用这些工具）",
+      toolsDesc,
+      "",
+      "# 输出格式",
+      "请返回一个 JSON 对象（不要包含 markdown 代码块标记），格式如下：",
+      JSON.stringify({
+        title: "习惯名称",
+        weekdays: [1, 3, 5],
+        timeSlot: "morning | afternoon | evening",
+        time: "HH:MM",
+        actions: [
+          { id: "act_xxx", type: "notify", trigger: "before", offsetMinutes: 30, channel: "wechat", message: "提醒内容" },
+          { id: "act_yyy", type: "ai_task", trigger: "before", offsetMinutes: 60, channel: "wechat", prompt: "描述 AI 需要执行的任务" },
+        ],
+      }, null, 2),
+      "",
+      "# 规则",
+      "1. weekdays: 0=周日, 1=周一, ..., 6=周六",
+      "2. timeSlot: morning(6-12点), afternoon(12-18点), evening(18点后)",
+      "3. time: 24小时制 HH:MM 格式",
+      "4. actions 必须包含至少一个 notify 类型（确保用户收到通知）",
+      "5. 如果用户描述涉及天气、健身装备、买菜等，生成 ai_task 类型的 action，prompt 中描述任务需求（如「查询明天天气并给出穿衣建议」），运行时 AI 会自动调用对应插件",
+      "6. 优先使用 ai_task 而非 plugin 类型，因为 ai_task 更灵活，能综合多个工具",
+      "7. 每个 action 的 id 用 act_ 前缀加随机字符串",
+      "8. trigger: before=提前, at=准时, after=之后; offsetMinutes 表示提前/延后的分钟数，trigger=at 时 offsetMinutes=0",
+      "9. channel: wechat=微信通知, dashboard=看板, both=两者",
+      "10. 只返回 JSON，不要有任何其他文字",
+    ].filter(Boolean).join("\n");
+
+    const provider = this.getProvider();
+    const result = await provider.chat({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: description },
+      ],
+      maxTokens: 2000,
+    });
+    this.logProviderUsage(memberId, result.usage);
+
+    let text = result.message.content.trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("AI 未能返回有效的 JSON 格式");
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      title: string;
+      weekdays: number[];
+      timeSlot?: string;
+      time?: string;
+      actions?: Array<{
+        id?: string;
+        type: string;
+        trigger: string;
+        offsetMinutes: number;
+        channel?: string;
+        message?: string;
+        prompt?: string;
+        toolName?: string;
+        toolParams?: Record<string, unknown>;
+      }>;
+    };
+
+    const routine: Routine = {
+      id: `rtn_${Date.now().toString(36)}`,
+      title: parsed.title,
+      weekdays: parsed.weekdays ?? [],
+      timeSlot: (parsed.timeSlot as Routine["timeSlot"]) ?? undefined,
+      time: parsed.time,
+      reminders: [],
+      actions: (parsed.actions ?? []).map((a, i) => ({
+        id: a.id || `act_${Date.now().toString(36)}_${i}`,
+        type: (a.type as "notify" | "plugin" | "ai_task") ?? "notify",
+        trigger: (a.trigger as "before" | "at" | "after") ?? "at",
+        offsetMinutes: a.offsetMinutes ?? 0,
+        channel: (a.channel as "wechat" | "dashboard" | "both") ?? "wechat",
+        message: a.message,
+        prompt: a.prompt,
+        toolName: a.toolName,
+        toolParams: a.toolParams,
+      })),
+    };
+
+    if (!routine.actions!.some((a) => a.type === "notify")) {
+      routine.actions!.unshift({
+        id: `act_${Date.now().toString(36)}_default`,
+        type: "notify",
+        trigger: "at",
+        offsetMinutes: 0,
+        channel: "wechat",
+        message: routine.title,
+      });
+    }
+
+    return routine;
+  }
+
   applyRoutines(memberId: string, routines: Routine[]): void {
     for (const routine of routines) {
       this.routineEngine.setRoutine(memberId, routine);
