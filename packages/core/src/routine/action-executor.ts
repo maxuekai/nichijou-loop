@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { getZonedDateTimeParts } from "@nichijou/shared";
 import type { Routine, RoutineAction, ReminderRule } from "@nichijou/shared";
 import type { LLMProvider } from "@nichijou/ai";
 import type { RoutineEngine } from "./routine-engine.js";
@@ -83,34 +84,21 @@ export class ActionExecutor {
 
   private async tick(): Promise<void> {
     const tz = this.configManager?.get().timezone || "Asia/Shanghai";
-    const now = new Date();
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", hour12: false,
-    }).formatToParts(now);
-    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-    const nowHH = get("hour") === "24" ? "00" : get("hour");
-    const nowMM = get("minute");
-    const y = get("year");
-    const mo = get("month");
-    const d = get("day");
-    const weekday = new Date(`${y}-${mo}-${d}T${nowHH}:${nowMM}:00`).getDay();
-    const minuteKey = `${y}-${mo}-${d}T${nowHH}:${nowMM}`;
+    const now = getZonedDateTimeParts(new Date(), tz);
 
     const members = this.familyManager.getMembers();
-    const currentDate = new Date(`${y}-${mo}-${d}T${nowHH}:${nowMM}:00`);
     for (const member of members) {
-      const routines = this.routineEngine.resolveEffectiveRoutines(member.id, currentDate);
+      const routines = this.routineEngine.resolveEffectiveRoutines(member.id, new Date(), tz);
       for (const routine of routines) {
-        if (!routine.weekdays.includes(weekday)) continue;
+        if (!routine.weekdays.includes(now.weekday)) continue;
         const effectiveTime = this.resolveTime(routine);
         if (!effectiveTime) continue;
         const actions = this.resolveActions(routine);
         for (const action of actions) {
-          if (this.shouldFire(effectiveTime, action, nowHH, nowMM)) {
-            const already = this.db.wasActionExecutedAt(member.id, routine.id, action.id, minuteKey);
+          if (this.shouldFire(effectiveTime, action, now.hour, now.minute)) {
+            const already = this.db.wasActionExecutedAt(member.id, routine.id, action.id, now.minuteKey);
             if (already) continue;
-            await this.executeAction(member.id, routine, action, minuteKey);
+            await this.executeAction(member.id, routine, action, now.minuteKey);
           }
         }
       }
@@ -119,6 +107,7 @@ export class ActionExecutor {
 
   private shouldFire(effectiveTime: string, action: RoutineAction, nowHH: string, nowMM: string): boolean {
     const [rH, rM] = effectiveTime.split(":").map(Number) as [number, number];
+    if (!Number.isFinite(rH) || !Number.isFinite(rM)) return false;
     const routineMinutes = rH * 60 + rM;
 
     let targetMinutes: number;
@@ -199,7 +188,9 @@ export class ActionExecutor {
       success = false;
     }
 
-    if (success && result) {
+    const channel = action.channel ?? "wechat";
+    const shouldSendWeChat = channel === "wechat" || channel === "both";
+    if (success && result && shouldSendWeChat) {
       try {
         await this.gateway.sendToMember(memberId, result);
       } catch (err) {

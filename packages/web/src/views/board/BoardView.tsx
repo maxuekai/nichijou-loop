@@ -178,13 +178,16 @@ export function BoardView() {
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [weekSchedule, setWeekSchedule] = useState<WeekSchedule>({});
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
+  const [boardError, setBoardError] = useState<string | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval>>();
 
   const loadSysInfo = useCallback(async () => {
     try {
       const data = await api.getSystemInfo();
       setSysInfo(data);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setBoardError(err instanceof Error ? err.message : "系统信息加载失败");
+    }
   }, []);
 
   useEffect(() => {
@@ -210,6 +213,7 @@ export function BoardView() {
 
   async function loadBoardData() {
     try {
+      setBoardError(null);
       const data = await api.getBoardData();
       setFamilyName(data.family?.name ?? "");
       setFamilyAvatar(data.family?.avatar ?? null);
@@ -219,21 +223,27 @@ export function BoardView() {
       const cfg = await api.getConfig();
       const configuredName = typeof cfg.butlerName === "string" ? cfg.butlerName.trim() : "";
       setButlerNameConfig(configuredName);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setBoardError(err instanceof Error ? err.message : "看板数据加载失败");
+    }
   }
 
   async function loadWeather() {
     try {
       const data = await api.getWeather();
       setWeather(data);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setBoardError(err instanceof Error ? err.message : "天气数据加载失败");
+    }
   }
 
   async function loadWeekSchedule() {
     try {
       const data = await api.getWeekSchedule();
       setWeekSchedule(data.schedule);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setBoardError(err instanceof Error ? err.message : "周计划加载失败");
+    }
   }
 
   const timeStr = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
@@ -363,6 +373,11 @@ export function BoardView() {
             </div>
           </div>
         </header>
+        {boardError && (
+          <div className="mb-4 text-sm text-red-300">
+            数据刷新异常：{boardError}
+          </div>
+        )}
 
         {/* ===== 宜忌 Bar ===== */}
         {(lunarInfo.yi.length > 0 || lunarInfo.ji.length > 0) && (

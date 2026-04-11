@@ -73,6 +73,7 @@ export function MembersPage() {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   // Routine editing
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
@@ -108,23 +109,36 @@ export function MembersPage() {
   }, []);
 
   async function loadMembers() {
-    const data = await api.getFamily();
-    setMembers(data.members);
+    try {
+      setPageError(null);
+      const data = await api.getFamily();
+      setMembers(data.members);
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "加载成员列表失败");
+    }
   }
 
   async function addMember() {
     if (!newName.trim()) return;
-    await api.addMember(newName.trim());
-    setNewName("");
-    loadMembers();
+    try {
+      setPageError(null);
+      await api.addMember(newName.trim());
+      setNewName("");
+      await loadMembers();
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "添加成员失败");
+    }
   }
 
   async function refreshMemberDetail(id: string) {
     try {
       const res = await fetch(`/api/members/${id}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as MemberDetail;
       setDetail(data);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "加载成员详情失败");
+    }
   }
 
   async function selectMember(id: string) {
@@ -144,6 +158,7 @@ export function MembersPage() {
     if (!selectedId) return;
     setSaving(true);
     try {
+      setPageError(null);
       await fetch(`/api/members/${selectedId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -151,7 +166,9 @@ export function MembersPage() {
       });
       setEditing(false);
       await refreshMemberDetail(selectedId);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "保存成员档案失败");
+    }
     setSaving(false);
   }
 
@@ -166,6 +183,7 @@ export function MembersPage() {
   async function saveMemberInfo() {
     if (!selectedId || !memberNameDraft.trim()) return;
     try {
+      setPageError(null);
       if (memberAvatarFile) {
         await api.uploadAvatar(selectedId, memberAvatarFile);
       }
@@ -173,24 +191,30 @@ export function MembersPage() {
       await loadMembers();
       await refreshMemberDetail(selectedId);
       setEditingMemberInfo(false);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "保存成员信息失败");
+    }
   }
 
   async function deleteMember(id: string) {
     try {
+      setPageError(null);
       await fetch(`/api/members/${id}`, { method: "DELETE" });
       if (selectedId === id) {
         setSelectedId(null);
         setDetail(null);
       }
-      loadMembers();
-    } catch { /* ignore */ }
+      await loadMembers();
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "删除成员失败");
+    }
     setDeleting(null);
   }
 
   async function saveRoutine(routine: Routine) {
     if (!selectedId) return;
     try {
+      setPageError(null);
       await fetch(`/api/routines/${selectedId}/${routine.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -199,16 +223,21 @@ export function MembersPage() {
       setEditingRoutine(null);
       setAiWarnings([]);
       await refreshMemberDetail(selectedId);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "保存习惯失败");
+    }
   }
 
   async function deleteRoutine(routineId: string) {
     if (!selectedId) return;
     try {
+      setPageError(null);
       await fetch(`/api/routines/${selectedId}/${routineId}`, { method: "DELETE" });
       setDeletingRoutine(null);
       await refreshMemberDetail(selectedId);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "删除习惯失败");
+    }
   }
 
   async function generateFromProfile() {
@@ -234,6 +263,7 @@ export function MembersPage() {
     if (!selectedId || !generatedRoutines) return;
     setApplyingGen(true);
     try {
+      setPageError(null);
       const selected = generatedRoutines.filter((_, i) => selectedGenIdx.has(i));
       if (selected.length > 0) {
         await fetch(`/api/members/${selectedId}/apply-routines`, {
@@ -244,26 +274,34 @@ export function MembersPage() {
       }
       setGeneratedRoutines(null);
       await refreshMemberDetail(selectedId);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "应用生成习惯失败");
+    }
     setApplyingGen(false);
   }
 
   async function saveOverride(ovr: Override) {
     if (!selectedId) return;
     try {
+      setPageError(null);
       await api.upsertPlan(selectedId, ovr.id, ovr as unknown as Record<string, unknown>);
       setEditingOverride(null);
       await refreshMemberDetail(selectedId);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "保存计划失败");
+    }
   }
 
   async function deleteOverride(ovrId: string) {
     if (!selectedId) return;
     try {
+      setPageError(null);
       await api.deletePlan(selectedId, ovrId);
       setDeletingOverride(null);
       await refreshMemberDetail(selectedId);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "删除计划失败");
+    }
   }
 
   async function parseWithAi(descOverride?: string) {
@@ -301,7 +339,9 @@ export function MembersPage() {
     try {
       const logs = await api.getActionLogs(selectedId);
       setActionLogs(logs);
-    } catch { /* ignore */ }
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "加载执行日志失败");
+    }
   }
 
 
@@ -360,6 +400,7 @@ export function MembersPage() {
           </button>
         </div>
       </div>
+      {pageError && <p className="text-sm text-red-600">{pageError}</p>}
 
       {members.length === 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 text-center">

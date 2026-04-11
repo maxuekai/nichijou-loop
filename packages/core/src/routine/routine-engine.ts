@@ -1,5 +1,5 @@
 import yaml from "js-yaml";
-import { formatDate, generateId } from "@nichijou/shared";
+import { formatDate, generateId, getZonedDateTimeParts } from "@nichijou/shared";
 import type { Routine, Plan, DayPlan, DayPlanItem, ReminderRule } from "@nichijou/shared";
 import type { StorageManager } from "../storage/storage.js";
 
@@ -102,13 +102,13 @@ export class RoutineEngine {
 
   addPlan(memberId: string, plan: Plan): void {
     const plans = this.getOwnPlans(memberId);
-    plans.push({ ...plan, id: plan.id || generateId("pln") });
+    plans.push(this.normalizePlanData({ ...plan, id: plan.id || generateId("pln") }));
     this.savePlans(memberId, plans);
   }
 
   addSharedPlan(plan: Plan): void {
     const plans = this.getSharedPlans();
-    plans.push({ ...plan, id: plan.id || generateId("pln") });
+    plans.push(this.normalizePlanData({ ...plan, id: plan.id || generateId("pln") }));
     this.saveSharedPlans(plans);
   }
 
@@ -116,10 +116,10 @@ export class RoutineEngine {
     const plans = this.getOwnPlans(memberId);
     const idx = plans.findIndex((o) => o.id === planId);
     if (idx === -1) {
-      this.addPlan(memberId, { ...data, id: planId } as Plan);
+      this.addPlan(memberId, this.normalizePlanData({ ...data, id: planId } as Plan));
       return;
     }
-    plans[idx] = { ...plans[idx]!, ...data, id: planId };
+    plans[idx] = this.normalizePlanData({ ...plans[idx]!, ...data, id: planId });
     this.savePlans(memberId, plans);
   }
 
@@ -127,10 +127,10 @@ export class RoutineEngine {
     const plans = this.getSharedPlans();
     const idx = plans.findIndex((o) => o.id === planId);
     if (idx === -1) {
-      this.addSharedPlan({ ...data, id: planId } as Plan);
+      this.addSharedPlan(this.normalizePlanData({ ...data, id: planId } as Plan));
       return;
     }
-    plans[idx] = { ...plans[idx]!, ...data, id: planId };
+    plans[idx] = this.normalizePlanData({ ...plans[idx]!, ...data, id: planId });
     this.saveSharedPlans(plans);
   }
 
@@ -161,9 +161,8 @@ export class RoutineEngine {
   removeOverride(memberId: string, overrideId: string): boolean { return this.removePlan(memberId, overrideId); }
   removeSharedOverride(overrideId: string): boolean { return this.removeSharedPlan(overrideId); }
 
-  resolveEffectiveRoutines(memberId: string, date: Date): Routine[] {
-    const weekday = date.getDay();
-    const dateStr = formatDate(date);
+  resolveEffectiveRoutines(memberId: string, date: Date, timeZone?: string): Routine[] {
+    const { weekday, dateStr } = this.resolveDateContext(date, timeZone);
     const routines = this.getRoutines(memberId);
     const plans = this.getPlans(memberId);
 
@@ -179,10 +178,10 @@ export class RoutineEngine {
     return [...activeRoutines, ...additions].filter((r) => !r.archived);
   }
 
-  resolveDayPlan(memberId: string, date: Date): DayPlan {
-    const dateStr = formatDate(date);
+  resolveDayPlan(memberId: string, date: Date, timeZone?: string): DayPlan {
+    const { dateStr } = this.resolveDateContext(date, timeZone);
     const plans = this.getPlans(memberId);
-    const activeRoutines = this.resolveEffectiveRoutines(memberId, date)
+    const activeRoutines = this.resolveEffectiveRoutines(memberId, date, timeZone)
       .filter((r) => !r.id.startsWith("plan_"));
     const additions = plans
       .filter((o) => this.matchesDate(o, dateStr) && o.action === "add")
@@ -318,7 +317,7 @@ export class RoutineEngine {
   }
 
   private resolveRoutineTime(routine: Routine): string | null {
-    if (routine.time) return routine.time;
+    if (routine.time) return this.normalizeTime(routine.time);
     if (routine.timeSlot === "morning") return "08:00";
     if (routine.timeSlot === "afternoon") return "14:00";
     if (routine.timeSlot === "evening") return "20:00";
@@ -326,14 +325,59 @@ export class RoutineEngine {
   }
 
   private matchesPlanTimeWindow(routineTime: string | null, plan: Plan): boolean {
-    const start = plan.startTime;
-    const end = plan.endTime;
+    const start = this.normalizeTime(plan.startTime);
+    const end = this.normalizeTime(plan.endTime);
     if (!start || !end || !routineTime) return true;
-    return routineTime >= start && routineTime <= end;
+    const routineMinutes = this.toMinutes(routineTime);
+    const startMinutes = this.toMinutes(start);
+    const endMinutes = this.toMinutes(end);
+    if (routineMinutes === null || startMinutes === null || endMinutes === null) return true;
+    return routineMinutes >= startMinutes && routineMinutes <= endMinutes;
   }
 
   private isAssignedToMember(assigneeMemberIds: string[] | undefined, memberId: string): boolean {
     if (!assigneeMemberIds || assigneeMemberIds.length === 0) return true;
     return assigneeMemberIds.includes(memberId);
+  }
+
+  private resolveDateContext(date: Date, timeZone?: string): { weekday: number; dateStr: string } {
+    if (!timeZone) {
+      return { weekday: date.getDay(), dateStr: formatDate(date) };
+    }
+    const zoned = getZonedDateTimeParts(date, timeZone);
+    return { weekday: zoned.weekday, dateStr: zoned.date };
+  }
+
+  private normalizePlanData(plan: Plan): Plan {
+    const normalizedAction = plan.action === "skip" || plan.action === "add" || plan.action === "modify"
+      ? plan.action
+      : "add";
+    const date = plan.date ?? (plan.dateRange ? undefined : formatDate(new Date()));
+    return {
+      ...plan,
+      action: normalizedAction,
+      date,
+      time: this.normalizeTime(plan.time ?? plan.startTime) ?? undefined,
+      startTime: this.normalizeTime(plan.startTime) ?? undefined,
+      endTime: this.normalizeTime(plan.endTime) ?? undefined,
+    };
+  }
+
+  private normalizeTime(value?: string): string | null {
+    if (!value) return null;
+    const match = value.trim().match(/^(\d{1,2}):(\d{1,2})$/);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+
+  private toMinutes(value: string): number | null {
+    const normalized = this.normalizeTime(value);
+    if (!normalized) return null;
+    const [hour, minute] = normalized.split(":").map(Number);
+    return hour * 60 + minute;
   }
 }

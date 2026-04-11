@@ -10,6 +10,7 @@ export function SoulEditor() {
   const [butlerNameDraft, setButlerNameDraft] = useState("Nichijou");
   const [butlerAvatarFile, setButlerAvatarFile] = useState<File | null>(null);
   const [butlerAvatarPreview, setButlerAvatarPreview] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getSoul().then((data) => setContent(data.content));
@@ -28,10 +29,15 @@ export function SoulEditor() {
   }
 
   async function save() {
-    await api.updateConfig({ butlerName: butlerName.trim() || "Nichijou" });
-    await api.updateSoul(content);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      setError(null);
+      await api.updateConfig({ butlerName: butlerName.trim() || "Nichijou" });
+      await api.updateSoul(content);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败，请稍后重试");
+    }
   }
 
   function openButlerEditDialog() {
@@ -42,14 +48,19 @@ export function SoulEditor() {
   }
 
   async function saveButlerInfo() {
-    const nextName = butlerNameDraft.trim() || "Nichijou";
-    if (butlerAvatarFile) {
-      await api.uploadButlerAvatar(butlerAvatarFile);
-      await loadButlerAvatar();
+    try {
+      setError(null);
+      const nextName = butlerNameDraft.trim() || "Nichijou";
+      if (butlerAvatarFile) {
+        await api.uploadButlerAvatar(butlerAvatarFile);
+        await loadButlerAvatar();
+      }
+      await api.updateConfig({ butlerName: nextName });
+      setButlerName(nextName);
+      setEditingButlerInfo(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存管家信息失败");
     }
-    await api.updateConfig({ butlerName: nextName });
-    setButlerName(nextName);
-    setEditingButlerInfo(false);
   }
 
   return (
@@ -61,6 +72,7 @@ export function SoulEditor() {
         </div>
         <div className="flex items-center gap-3">
           {saved && <span className="text-sm text-green-600">已保存</span>}
+          {error && <span className="text-sm text-red-600">{error}</span>}
           <button
             onClick={save}
             className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors"

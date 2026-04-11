@@ -12,6 +12,62 @@ export function formatDate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+export interface ZonedDateTimeParts {
+  year: string;
+  month: string;
+  day: string;
+  hour: string;
+  minute: string;
+  weekday: number;
+  date: string;
+  time: string;
+  minuteKey: string;
+}
+
+export function getZonedDateTimeParts(date: Date, timeZone: string): ZonedDateTimeParts {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const year = get("year");
+  const month = get("month");
+  const day = get("day");
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  const minute = get("minute");
+  const dateStr = `${year}-${month}-${day}`;
+  const weekdayText = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+  }).format(date);
+  const weekdayMap: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+  const weekday = weekdayMap[weekdayText] ?? 0;
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    weekday,
+    date: dateStr,
+    time: `${hour}:${minute}`,
+    minuteKey: `${dateStr}T${hour}:${minute}`,
+  };
+}
+
 export function parseDate(str: string): Date {
   const [y, m, d] = str.split("-").map(Number);
   return new Date(y!, m! - 1, d);

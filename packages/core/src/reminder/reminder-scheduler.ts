@@ -91,10 +91,25 @@ export class ReminderScheduler {
 
   private async fire(reminder: Reminder): Promise<void> {
     this.db.markReminderDone(reminder.id);
+    const shouldSendWeChat = reminder.channel === "wechat" || reminder.channel === "both";
+    let success = true;
+    let result = `⏰ 提醒：${reminder.message}`;
     try {
-      await this.gateway.sendToMember(reminder.memberId, `⏰ 提醒：${reminder.message}`);
+      if (shouldSendWeChat) {
+        await this.gateway.sendToMember(reminder.memberId, `⏰ 提醒：${reminder.message}`);
+      }
     } catch (err) {
+      success = false;
+      result = err instanceof Error ? err.message : String(err);
       console.error(`[Reminder] 发送提醒失败 (${reminder.id}):`, err);
+    } finally {
+      this.db.logActionExecution(
+        reminder.memberId,
+        `reminder_${reminder.id}`,
+        `reminder_${reminder.channel}`,
+        result,
+        success,
+      );
     }
   }
 

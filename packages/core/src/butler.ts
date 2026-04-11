@@ -2,6 +2,7 @@ import { createProvider } from "@nichijou/ai";
 import type { LLMProvider } from "@nichijou/ai";
 import { AgentSession, createAgentSession } from "@nichijou/agent";
 import type { AgentEvent } from "@nichijou/agent";
+import { getZonedDateTimeParts } from "@nichijou/shared";
 import type { FamilyMember, InboundMessage, ToolDefinition, Routine, Plan } from "@nichijou/shared";
 import { hostname, platform, arch, cpus, totalmem, freemem, uptime as osUptime, loadavg } from "node:os";
 import type { Channel } from "./gateway/channel.js";
@@ -193,7 +194,8 @@ export class ButlerService {
         prompt += `# 当前对话成员\n\n${profile}\n\n---\n\n`;
       }
       const today = new Date();
-      const plan = this.routineEngine.resolveDayPlan(member.id, today);
+      const tz = this.config.get().timezone || "Asia/Shanghai";
+      const plan = this.routineEngine.resolveDayPlan(member.id, today, tz);
       if (plan.items.length > 0) {
         prompt += `# 今日计划\n\n`;
         for (const item of plan.items) {
@@ -909,9 +911,7 @@ export class ButlerService {
     this.logProviderUsage(memberId, result.usage);
 
     const text = result.message.content.trim();
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("AI 未能返回有效的 JSON 格式");
-    const parsed = JSON.parse(jsonMatch[0]) as {
+    const parsed = this.extractJsonObject<{
       title: string;
       weekdays: number[];
       time?: string;
@@ -926,7 +926,7 @@ export class ButlerService {
         toolParams?: Record<string, unknown>;
       }>;
       warnings?: string[];
-    };
+    }>(text);
 
     const warnings: string[] = parsed.warnings ?? [];
 
@@ -1010,14 +1010,14 @@ export class ButlerService {
     this.logProviderUsage(memberId, result.usage);
 
     const text = result.message.content.trim();
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("AI 未能返回有效的 JSON 格式");
-    const parsed = JSON.parse(jsonMatch[0]) as Plan & { warnings?: string[] };
-
-    const today = iso.slice(0, 10);
+    const parsed = this.extractJsonObject<Plan & { warnings?: string[] }>(text);
+    const action = parsed.action === "skip" || parsed.action === "add" || parsed.action === "modify"
+      ? parsed.action
+      : "add";
+    const today = getZonedDateTimeParts(new Date(), this.config.get().timezone || "Asia/Shanghai").date;
     const plan: Plan = {
       id: `pln_${Date.now().toString(36)}`,
-      action: (parsed.action as Plan["action"]) ?? "add",
+      action,
       title: parsed.title || description.slice(0, 20),
       reason: parsed.reason,
       date: parsed.date ?? (parsed.dateRange ? undefined : today),
@@ -1029,6 +1029,22 @@ export class ButlerService {
     };
 
     return { plan, warnings: parsed.warnings ?? [] };
+  }
+
+  private extractJsonObject<T>(text: string): T {
+    const first = text.indexOf("{");
+    if (first === -1) throw new Error("AI 未能返回有效的 JSON 格式");
+    let depth = 0;
+    for (let i = first; i < text.length; i += 1) {
+      const ch = text[i];
+      if (ch === "{") depth += 1;
+      if (ch === "}") depth -= 1;
+      if (depth === 0) {
+        const raw = text.slice(first, i + 1);
+        return JSON.parse(raw) as T;
+      }
+    }
+    throw new Error("AI 未能返回完整 JSON");
   }
 
   applyRoutines(memberId: string, routines: Routine[]): void {

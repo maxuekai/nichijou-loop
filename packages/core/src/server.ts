@@ -3,7 +3,7 @@ import { readFileSync, existsSync, statfsSync, readdirSync } from "node:fs";
 import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hostname, platform, release, arch, cpus, totalmem, freemem, uptime as osUptime, loadavg } from "node:os";
-import { formatDate } from "@nichijou/shared";
+import { getZonedDateTimeParts } from "@nichijou/shared";
 import type { ButlerService } from "./butler.js";
 
 const PROCESS_START_TIME = Date.now();
@@ -37,6 +37,16 @@ const MIME_TYPES: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
 };
+
+const CONFIG_PATCH_KEYS = new Set([
+  "llm",
+  "port",
+  "timezone",
+  "setupCompleted",
+  "butlerName",
+  "location",
+  "plugins",
+]);
 
 export class NichijouServer {
   private butler: ButlerService;
@@ -141,9 +151,10 @@ export class NichijouServer {
 
       if (path === "/api/config" && method === "PUT") {
         const body = await this.readBody(req);
-        this.butler.config.update(body as Record<string, unknown>);
+        const patch = this.pickConfigPatch(body);
+        this.butler.config.update(patch);
         this.butler.refreshProvider();
-        if (body && typeof body === "object" && "plugins" in body) {
+        if ("plugins" in patch) {
           await this.butler.reloadPlugins();
         }
         this.json(res, { ok: true });
@@ -191,7 +202,8 @@ export class NichijouServer {
         const profile = this.butler.storage.readMemberProfile(memberId);
         const routines = this.butler.routineEngine.getRoutines(memberId);
         const plans = this.butler.routineEngine.getPlans(memberId);
-        const dayPlan = this.butler.routineEngine.resolveDayPlan(memberId, new Date());
+        const tz = this.butler.config.get().timezone || "Asia/Shanghai";
+        const dayPlan = this.butler.routineEngine.resolveDayPlan(memberId, new Date(), tz);
         this.json(res, { member, profile, routines, plans, overrides: plans, dayPlan });
         return;
       }
@@ -402,6 +414,11 @@ export class NichijouServer {
         return;
       }
 
+      if (path === "/api/routines/parse" && method !== "POST") {
+        this.json(res, { error: "Method Not Allowed" }, 405);
+        return;
+      }
+
       if (path === "/api/plans/parse" && method === "POST") {
         try {
           const body = await this.readBody(req) as { memberId: string; description: string };
@@ -457,7 +474,8 @@ export class NichijouServer {
 
       if (path.startsWith("/api/day-plan/") && method === "GET") {
         const memberId = path.split("/")[3]!;
-        const plan = this.butler.routineEngine.resolveDayPlan(memberId, new Date());
+        const tz = this.butler.config.get().timezone || "Asia/Shanghai";
+        const plan = this.butler.routineEngine.resolveDayPlan(memberId, new Date(), tz);
         this.json(res, plan);
         return;
       }
@@ -708,18 +726,20 @@ export class NichijouServer {
 
       if (path === "/api/board/week-schedule" && method === "GET") {
         const members = this.butler.familyManager.getMembers();
-        const today = new Date();
-        const weekStart = new Date(today);
-        weekStart.setDate(today.getDate() - today.getDay());
+        const tz = this.butler.config.get().timezone || "Asia/Shanghai";
+        const now = new Date();
+        const zonedNow = getZonedDateTimeParts(now, tz);
+        const weekStart = new Date(`${zonedNow.date}T00:00:00`);
+        weekStart.setDate(weekStart.getDate() - zonedNow.weekday);
 
         const schedule: Record<string, Record<string, string[]>> = {};
         for (let i = 0; i < 7; i++) {
           const d = new Date(weekStart);
           d.setDate(weekStart.getDate() + i);
-          const dateStr = formatDate(d);
+          const dateStr = getZonedDateTimeParts(d, tz).date;
           schedule[dateStr] = {};
           for (const member of members) {
-            const plan = this.butler.routineEngine.resolveDayPlan(member.id, d);
+            const plan = this.butler.routineEngine.resolveDayPlan(member.id, d, tz);
             if (plan.items.length > 0) {
               schedule[dateStr]![member.name] = plan.items.map((it) => it.title);
             }
@@ -736,7 +756,8 @@ export class NichijouServer {
 
         const memberDetails = members.map((m) => {
           const profile = this.butler.storage.readMemberProfile(m.id);
-          const dayPlan = this.butler.routineEngine.resolveDayPlan(m.id, new Date());
+          const tz = this.butler.config.get().timezone || "Asia/Shanghai";
+          const dayPlan = this.butler.routineEngine.resolveDayPlan(m.id, new Date(), tz);
           return { ...m, profile, dayPlan };
         });
 
@@ -753,7 +774,9 @@ export class NichijouServer {
         const notifications = recentActionLogs.map((log) => ({
           ...log,
           memberName: memberMap.get(log.memberId)?.name ?? log.memberId,
-          routineTitle: routineTitleMaps.get(log.memberId)?.get(log.routineId) ?? log.routineId,
+          routineTitle: log.routineId.startsWith("reminder_")
+            ? "提醒事项"
+            : (routineTitleMaps.get(log.memberId)?.get(log.routineId) ?? log.routineId),
         }));
 
         this.json(res, { family: familyData, members: memberDetails, soul, notifications });
@@ -914,8 +937,19 @@ export class NichijouServer {
   private readBody(req: IncomingMessage): Promise<unknown> {
     return new Promise((resolve, reject) => {
       let data = "";
-      req.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+      const maxBodySize = 1024 * 1024;
+      req.on("data", (chunk: Buffer) => {
+        data += chunk.toString();
+        if (data.length > maxBodySize) {
+          reject(new Error("Request body too large"));
+          req.destroy();
+        }
+      });
       req.on("end", () => {
+        if (!data.trim()) {
+          resolve({});
+          return;
+        }
         try {
           resolve(JSON.parse(data));
         } catch {
@@ -924,6 +958,17 @@ export class NichijouServer {
       });
       req.on("error", reject);
     });
+  }
+
+  private pickConfigPatch(body: unknown): Record<string, unknown> {
+    if (!body || typeof body !== "object") return {};
+    const patch: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+      if (CONFIG_PATCH_KEYS.has(key)) {
+        patch[key] = value;
+      }
+    }
+    return patch;
   }
 
   private readAvatarUpload(req: IncomingMessage): Promise<{ buffer: Buffer; ext: string }> {

@@ -54,14 +54,21 @@ export function FamilyPage() {
   const [planParsing, setPlanParsing] = useState(false);
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionStart, setMentionStart] = useState<number | null>(null);
 
   useEffect(() => {
-    void loadFamily();
-    void loadData();
+    void (async () => {
+      try {
+        setPageError(null);
+        await Promise.all([loadFamily(), loadData()]);
+      } catch (err) {
+        setPageError(err instanceof Error ? err.message : "家庭数据加载失败");
+      }
+    })();
   }, []);
 
   async function loadFamily() {
@@ -192,12 +199,15 @@ export function FamilyPage() {
     if (!nextName) return;
     setSavingFamily(true);
     try {
+      setPageError(null);
       if (familyAvatarFile) {
         await api.uploadFamilyAvatar(familyAvatarFile);
       }
       await api.updateFamily({ name: nextName });
       await loadFamily();
       setEditingFamilyInfo(false);
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : "保存家庭信息失败");
     } finally {
       setSavingFamily(false);
     }
@@ -217,6 +227,7 @@ export function FamilyPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-stone-800">家庭</h1>
+      {pageError && <p className="text-sm text-red-600">{pageError}</p>}
 
       <div className="bg-white rounded-xl border border-stone-200 p-6">
         <h3 className="text-sm font-medium text-stone-500 mb-4">家庭信息</h3>
@@ -259,7 +270,15 @@ export function FamilyPage() {
               </div>
               <div className="flex gap-1">
                 <button onClick={() => { setParseError(null); setAiWarnings([]); setEditingRoutine({ ...r, description: r.description ?? `${r.title} ${formatAssignees(r.assigneeMemberIds)}` }); }} className="px-2 py-1 text-xs rounded border border-stone-300 text-stone-600 hover:bg-stone-100">编辑</button>
-                <button onClick={async () => { await api.deleteFamilyRoutine(r.id); await loadData(); }} className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50">删除</button>
+                <button onClick={async () => {
+                  try {
+                    setPageError(null);
+                    await api.deleteFamilyRoutine(r.id);
+                    await loadData();
+                  } catch (err) {
+                    setPageError(err instanceof Error ? err.message : "删除家庭习惯失败");
+                  }
+                }} className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50">删除</button>
               </div>
             </div>
           ))}
@@ -285,7 +304,15 @@ export function FamilyPage() {
               </div>
               <div className="flex gap-1">
                 <button onClick={() => { setParseError(null); setAiWarnings([]); setEditingPlan({ ...p, description: p.description ?? `${p.title ?? "家庭计划"} ${formatAssignees(p.assigneeMemberIds)}` }); }} className="px-2 py-1 text-xs rounded border border-stone-300 text-stone-600 hover:bg-stone-100">编辑</button>
-                <button onClick={async () => { await api.deleteFamilyPlan(p.id); await loadData(); }} className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50">删除</button>
+                <button onClick={async () => {
+                  try {
+                    setPageError(null);
+                    await api.deleteFamilyPlan(p.id);
+                    await loadData();
+                  } catch (err) {
+                    setPageError(err instanceof Error ? err.message : "删除家庭计划失败");
+                  }
+                }} className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50">删除</button>
               </div>
             </div>
           ))}
@@ -334,9 +361,14 @@ export function FamilyPage() {
             <div className="flex justify-end gap-3 mt-5">
               <button onClick={() => setEditingRoutine(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100">取消</button>
               <button onClick={async () => {
-                await api.upsertFamilyRoutine(editingRoutine.id, { ...editingRoutine, assigneeMemberIds: parseAssigneesFromText(editingRoutine.description) });
-                setEditingRoutine(null);
-                await loadData();
+                try {
+                  setPageError(null);
+                  await api.upsertFamilyRoutine(editingRoutine.id, { ...editingRoutine, assigneeMemberIds: parseAssigneesFromText(editingRoutine.description) });
+                  setEditingRoutine(null);
+                  await loadData();
+                } catch (err) {
+                  setPageError(err instanceof Error ? err.message : "保存家庭习惯失败");
+                }
               }} className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">保存</button>
             </div>
           </div>
@@ -383,9 +415,14 @@ export function FamilyPage() {
             <div className="flex justify-end gap-3 mt-5">
               <button onClick={() => setEditingPlan(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100">取消</button>
               <button onClick={async () => {
-                await api.upsertFamilyPlan(editingPlan.id, { ...editingPlan, assigneeMemberIds: parseAssigneesFromText(editingPlan.description) });
-                setEditingPlan(null);
-                await loadData();
+                try {
+                  setPageError(null);
+                  await api.upsertFamilyPlan(editingPlan.id, { ...editingPlan, assigneeMemberIds: parseAssigneesFromText(editingPlan.description) });
+                  setEditingPlan(null);
+                  await loadData();
+                } catch (err) {
+                  setPageError(err instanceof Error ? err.message : "保存家庭计划失败");
+                }
               }} className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">保存</button>
             </div>
           </div>
