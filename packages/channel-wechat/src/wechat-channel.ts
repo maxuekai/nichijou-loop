@@ -228,6 +228,14 @@ export class WeChatChannel implements Channel {
 
       const fromUserId = msg.from_user_id ?? "";
 
+      // Persist context_token before any routing so it survives restarts
+      if (msg.context_token) {
+        this.storage.writeText(
+          `wechat/connections/${connectionId}/context_token.txt`,
+          msg.context_token,
+        );
+      }
+
       // Find the connection for this user
       const connId = this.userIdIndex.get(fromUserId);
       const conn = connId ? this.connections.get(connId) : undefined;
@@ -308,13 +316,23 @@ export class WeChatChannel implements Channel {
       throw new Error(`连接 ${connId} 状态: ${conn.status}`);
     }
 
-    // Send to the WeChat user who scanned (not the bot itself)
     const toUserId = conn.wechatUserId;
     if (!toUserId) {
       throw new Error(`连接 ${connId} 缺少 wechatUserId`);
     }
 
-    await client.sendText(toUserId, text);
+    let contextToken = client.getContextToken(toUserId);
+    if (!contextToken) {
+      const saved = this.storage.readText(`wechat/connections/${connId}/context_token.txt`);
+      if (saved) contextToken = saved.trim();
+    }
+    if (!contextToken) {
+      throw new Error(
+        `成员 ${memberId} 的微信会话令牌不可用。请先让该成员给机器人发一条消息以建立会话。`,
+      );
+    }
+
+    await client.sendText(toUserId, text, contextToken);
   }
 
   getStatus(): ChannelStatus {
