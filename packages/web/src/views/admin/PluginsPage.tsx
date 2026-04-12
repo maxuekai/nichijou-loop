@@ -33,6 +33,8 @@ export function PluginsPage() {
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
+  const [toggling, setToggling] = useState<string | null>(null);
 
   useEffect(() => {
     loadPlugins();
@@ -47,6 +49,23 @@ export function PluginsPage() {
       setPlugins([]);
       setLoadError(e instanceof Error ? e.message : "无法连接 API（请确认本机已运行 nichijou dev / start，默认端口 3000，与 Vite 代理一致）");
     }
+  }
+
+
+  async function togglePluginEnabled(pluginId: string, enabled: boolean) {
+    setToggling(pluginId);
+    setToggleError(null);
+    try {
+      const res = await api.setPluginEnabled(pluginId, enabled);
+      if (!res.ok) {
+        setToggleError(res.error ?? "操作失败");
+      } else {
+        await loadPlugins();
+      }
+    } catch (e) {
+      setToggleError(e instanceof Error ? e.message : "操作失败");
+    }
+    setToggling(null);
   }
 
   function toggleExpand(id: string) {
@@ -81,6 +100,7 @@ export function PluginsPage() {
       await api.updatePluginConfig(pluginId, configValues);
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 2000);
+      await loadPlugins();
     } catch (e) {
       setConfigError(e instanceof Error ? e.message : "保存失败");
     }
@@ -184,12 +204,20 @@ export function PluginsPage() {
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-xs text-stone-400">{plugin.tools.length} 个工具</span>
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-                  plugin.enabled ? "bg-green-50 text-green-700" : "bg-stone-100 text-stone-500"
-                }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${plugin.enabled ? "bg-green-500" : "bg-stone-400"}`} />
-                  {plugin.enabled ? "已启用" : "已禁用"}
-                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void togglePluginEnabled(plugin.id, !plugin.enabled);
+                  }}
+                  disabled={toggling === plugin.id}
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                    plugin.enabled ? "bg-green-500" : "bg-stone-300"
+                  } ${toggling === plugin.id ? "opacity-50" : "cursor-pointer"}`}
+                >
+                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                    plugin.enabled ? "translate-x-4" : "translate-x-0.5"
+                  }`} />
+                </button>
                 <svg
                   className={`w-4 h-4 text-stone-400 transition-transform ${expanded.has(plugin.id) ? "rotate-180" : ""}`}
                   fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
@@ -201,6 +229,12 @@ export function PluginsPage() {
 
             {expanded.has(plugin.id) && (
               <div className="border-t border-stone-100 p-5 bg-stone-50/30">
+                {toggleError && toggling === null && (
+                  <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
+                    {toggleError}
+                    <button onClick={() => setToggleError(null)} className="ml-2 underline cursor-pointer">关闭</button>
+                  </div>
+                )}
                 <h4 className="text-xs font-medium text-stone-500 mb-3">提供的工具</h4>
                 <div className="space-y-2">
                   {plugin.tools.map((tool) => (

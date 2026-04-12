@@ -97,6 +97,15 @@ const NAV_GROUPS = [
         ),
       },
       {
+        to: "/admin/tools",
+        label: "工具",
+        icon: (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17l-5.66-5.66a8 8 0 1111.32 0l-5.66 5.66zm0 0L12 21" />
+          </svg>
+        ),
+      },
+      {
         to: "/admin/status",
         label: "状态",
         icon: (

@@ -49,6 +49,7 @@ export class PluginHost {
   getAllTools(): ToolDefinition[] {
     const tools: ToolDefinition[] = [];
     for (const plugin of this.plugins.values()) {
+      if (!this.isEnabled(plugin.id)) continue;
       tools.push(...plugin.tools);
     }
     return tools;
@@ -69,6 +70,7 @@ export class PluginHost {
   getAvailableTools(): Array<{ pluginId: string; pluginName: string; toolName: string; description: string }> {
     const result: Array<{ pluginId: string; pluginName: string; toolName: string; description: string }> = [];
     for (const plugin of this.plugins.values()) {
+      if (!this.isEnabled(plugin.id)) continue;
       for (const tool of plugin.tools) {
         result.push({ pluginId: plugin.id, pluginName: plugin.name, toolName: tool.name, description: tool.description });
       }
@@ -80,6 +82,36 @@ export class PluginHost {
     const config = this.pluginConfigs.get(pluginId);
     if (!config) return true;
     return config.enabled !== false;
+  }
+
+  /** Check whether all required config fields have values */
+  hasRequiredConfig(pluginId: string): { satisfied: boolean; missing: string[] } {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin?.configSchema) return { satisfied: true, missing: [] };
+    const config = this.pluginConfigs.get(pluginId) ?? {};
+    const missing: string[] = [];
+    for (const [key, field] of Object.entries(plugin.configSchema)) {
+      if (field.required) {
+        const val = config[key];
+        if (val === undefined || val === null || val === "") {
+          missing.push(key);
+        }
+      }
+    }
+    return { satisfied: missing.length === 0, missing };
+  }
+
+  setEnabled(pluginId: string, enabled: boolean): { ok: boolean; error?: string } {
+    if (enabled) {
+      const check = this.hasRequiredConfig(pluginId);
+      if (!check.satisfied) {
+        return { ok: false, error: `必填配置项未填写: ${check.missing.join(", ")}` };
+      }
+    }
+    const config = { ...(this.pluginConfigs.get(pluginId) ?? {}) };
+    config.enabled = enabled;
+    this.setPluginConfig(pluginId, config);
+    return { ok: true };
   }
 
   getPluginConfig(pluginId: string): Record<string, unknown> {

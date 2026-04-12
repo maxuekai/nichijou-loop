@@ -700,6 +700,61 @@ export class NichijouServer {
         }
       }
 
+      {
+        const pluginToggleMatch = path.match(/^\/api\/plugins\/([^/]+)\/enabled$/);
+        if (pluginToggleMatch && method === "PUT") {
+          const pluginId = pluginToggleMatch[1]!;
+          const plugin = this.butler.pluginHost.getPlugin(pluginId);
+          if (!plugin) {
+            this.json(res, { error: `plugin not found: ${pluginId}` }, 404);
+            return;
+          }
+          const body = await this.readBody(req) as { enabled: boolean };
+          const result = this.butler.pluginHost.setEnabled(pluginId, body.enabled);
+          if (!result.ok) {
+            this.json(res, { ok: false, error: result.error });
+          } else {
+            this.json(res, { ok: true });
+          }
+          return;
+        }
+      }
+
+      // --- Tools API ---
+      if (path === "/api/tools" && method === "GET") {
+        this.json(res, this.butler.getAllToolDescriptions());
+        return;
+      }
+
+      {
+        const toolExecMatch = path.match(/^\/api\/tools\/([^/]+)\/execute$/);
+        if (toolExecMatch && method === "POST") {
+          const toolName = decodeURIComponent(toolExecMatch[1]!);
+          const body = await this.readBody(req) as Record<string, unknown> | null;
+          const params = body ?? {};
+          const result = await this.butler.executeTool(toolName, params);
+          this.json(res, result);
+          return;
+        }
+      }
+
+      // --- Context management ---
+      {
+        const clearCtxMatch = path.match(/^\/api\/members\/([^/]+)\/clear-context$/);
+        if (clearCtxMatch && method === "POST") {
+          const memberId = clearCtxMatch[1]!;
+          this.butler.clearMemberSession(memberId);
+          this.json(res, { ok: true });
+          return;
+        }
+      }
+
+      if (path === "/api/clear-context" && method === "POST") {
+        this.butler.clearAllSessions();
+        this.json(res, { ok: true });
+        return;
+      }
+
       // --- Geo API ---
       if (path === "/api/geo/detect" && method === "GET") {
         try {

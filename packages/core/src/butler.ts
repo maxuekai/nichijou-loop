@@ -17,6 +17,7 @@ import { createFamilyTools } from "./tools/family-tools.js";
 import { createRoutineTools } from "./tools/routine-tools.js";
 import { createMemoryTools } from "./tools/memory-tools.js";
 import { createReminderTools } from "./tools/reminder-tools.js";
+import { createMessageTools } from "./tools/message-tools.js";
 import { ReminderScheduler } from "./reminder/reminder-scheduler.js";
 import { PluginHost } from "./plugin-host/plugin-host.js";
 import { resolvePluginImportUrl } from "./plugins/resolve-plugin.js";
@@ -146,8 +147,55 @@ export class ButlerService {
       ...createRoutineTools(this.routineEngine, this.familyManager),
       ...createMemoryTools(this.storage),
       ...createReminderTools(this.reminderScheduler),
+      ...createMessageTools(this.gateway, (id) => this.clearMemberSession(id)),
       ...this.pluginHost.getAllTools(),
     ];
+  }
+
+  clearMemberSession(memberId: string): void {
+    this.sessions.delete(memberId);
+  }
+
+  clearAllSessions(): void {
+    this.sessions.clear();
+  }
+
+  getAllToolDescriptions(): Array<{ source: string; name: string; description: string; parameters: Record<string, unknown> }> {
+    const result: Array<{ source: string; name: string; description: string; parameters: Record<string, unknown> }> = [];
+    const coreTools = [
+      ...createFamilyTools(this.familyManager, this.storage),
+      ...createRoutineTools(this.routineEngine, this.familyManager),
+      ...createMemoryTools(this.storage),
+      ...createReminderTools(this.reminderScheduler),
+      ...createMessageTools(this.gateway, () => {}),
+    ];
+    for (const t of coreTools) {
+      result.push({ source: "core", name: t.name, description: t.description, parameters: t.parameters });
+    }
+    for (const plugin of this.pluginHost.getAllPlugins()) {
+      for (const t of plugin.tools) {
+        result.push({ source: `plugin:${plugin.id}`, name: t.name, description: t.description, parameters: t.parameters });
+      }
+    }
+    return result;
+  }
+
+  async executeTool(toolName: string, params: Record<string, unknown>): Promise<{ content: string; isError?: boolean }> {
+    for (const plugin of this.pluginHost.getAllPlugins()) {
+      if (plugin.tools.some((t) => t.name === toolName)) {
+        return this.pluginHost.executeTool(toolName, params);
+      }
+    }
+    const coreTools = [
+      ...createFamilyTools(this.familyManager, this.storage),
+      ...createRoutineTools(this.routineEngine, this.familyManager),
+      ...createMemoryTools(this.storage),
+      ...createReminderTools(this.reminderScheduler),
+      ...createMessageTools(this.gateway, (id) => this.clearMemberSession(id)),
+    ];
+    const tool = coreTools.find((t) => t.name === toolName);
+    if (!tool) return { content: `工具 "${toolName}" 不存在`, isError: true };
+    return tool.execute(params);
   }
 
   /** 使用配置时区格式化当前时间，返回人类可读 + ISO 字符串 */

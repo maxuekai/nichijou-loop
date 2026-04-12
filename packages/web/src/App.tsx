@@ -12,6 +12,7 @@ import { WeChatPage } from "./views/admin/WeChatPage";
 import { LogsPage } from "./views/admin/LogsPage";
 import { RemindersPage } from "./views/admin/RemindersPage";
 import { PluginsPage } from "./views/admin/PluginsPage";
+import { ToolsPage } from "./views/admin/ToolsPage";
 import { FamilyPage } from "./views/admin/FamilyPage";
 import { BoardView } from "./views/board/BoardView";
 
@@ -49,6 +50,7 @@ export function App() {
         <Route path="logs" element={<LogsPage />} />
         <Route path="reminders" element={<RemindersPage />} />
         <Route path="plugins" element={<PluginsPage />} />
+        <Route path="tools" element={<ToolsPage />} />
       </Route>
       <Route path="*" element={<Navigate to={setupDone ? "/admin" : "/setup"} replace />} />
     </Routes>

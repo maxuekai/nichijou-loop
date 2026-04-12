@@ -92,6 +92,7 @@ export function MembersPage() {
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [contextCleared, setContextCleared] = useState(false);
 
   // Routine editing
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
@@ -511,12 +512,29 @@ export function MembersPage() {
                   <p className="text-xs text-stone-400 truncate">{detail.member.role === "admin" ? "管理员" : "成员"} · {detail.member.id}</p>
                 </div>
               </div>
-              <button
-                onClick={openMemberEditDialog}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
-              >
-                编辑
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => {
+                    if (!selectedId) return;
+                    void api.clearMemberContext(selectedId).then(() => {
+                      setPageError(null);
+                      setContextCleared(true);
+                      setTimeout(() => setContextCleared(false), 2000);
+                    }).catch((err) => {
+                      setPageError(err instanceof Error ? err.message : "清除上下文失败");
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 transition-colors"
+                >
+                  {contextCleared ? "已清除" : "清除上下文"}
+                </button>
+                <button
+                  onClick={openMemberEditDialog}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
+                >
+                  编辑
+                </button>
+              </div>
             </div>
             {/* Tabs */}
             <div className="flex gap-1 bg-stone-100 rounded-lg p-1">

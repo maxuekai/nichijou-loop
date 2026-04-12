@@ -162,6 +162,25 @@ export const api = {
       { method: "POST" },
     ),
 
+  // --- Tools ---
+
+  getAllTools: () =>
+    request<Array<{ source: string; name: string; description: string; parameters: Record<string, unknown> }>>("/tools"),
+
+  executeTool: (toolName: string, params: Record<string, unknown>) =>
+    request<{ content: string; isError?: boolean }>(`/tools/${encodeURIComponent(toolName)}/execute`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+
+  // --- Context ---
+
+  clearMemberContext: (memberId: string) =>
+    request<{ ok: boolean }>(`/members/${memberId}/clear-context`, { method: "POST" }),
+
+  clearAllContext: () =>
+    request<{ ok: boolean }>("/clear-context", { method: "POST" }),
+
   // --- Plugins ---
 
   getPluginTools: () =>
@@ -186,6 +205,9 @@ export const api = {
 
   updatePluginConfig: (pluginId: string, config: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/plugins/${pluginId}/config`, { method: "PUT", body: JSON.stringify(config) }),
+
+  setPluginEnabled: (pluginId: string, enabled: boolean) =>
+    request<{ ok: boolean; error?: string }>(`/plugins/${pluginId}/enabled`, { method: "PUT", body: JSON.stringify({ enabled }) }),
 
   // --- Geo ---
 
