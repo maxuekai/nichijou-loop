@@ -7,19 +7,12 @@ export interface LLMConfig {
   model: string;
 }
 
-export interface LocationConfig {
-  lat: string;
-  lon: string;
-  name?: string;
-}
-
 export interface NichijouConfig {
   llm: LLMConfig;
   port: number;
   timezone: string;
   setupCompleted: boolean;
   butlerName?: string;
-  location?: LocationConfig;
   plugins?: string[];
 }
 

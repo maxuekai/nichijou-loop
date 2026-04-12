@@ -252,6 +252,12 @@ export class ButlerService {
         prompt += "\n---\n\n";
       }
     }
+    const family = this.familyManager.getFamily();
+    if (family?.homeAdcode || family?.homeCity) {
+      prompt += `# 家庭常居地\n\n`;
+      prompt += `优先位置参数：${family.homeAdcode ?? family.homeCity}\n`;
+      prompt += `当调用天气相关插件工具且用户未提供城市时，优先使用此位置。\n\n---\n\n`;
+    }
 
     prompt += `# 功能说明\n\n你有以下工具可以使用来帮助家庭成员管理生活。请根据对话自然地调用工具。\n`;
     prompt += `\n当前成员 ID：${member?.id ?? "未知"}\n`;

@@ -168,11 +168,12 @@ export class ActionExecutor {
             break;
           }
           const params = { ...(action.toolParams ?? {}) };
-          if (!params.lat && !params.lon && this.configManager) {
-            const loc = this.configManager.get().location;
-            if (loc) {
-              params.lat = loc.lat;
-              params.lon = loc.lon;
+          if (action.toolName === "weather_query" && !params.city) {
+            const family = this.familyManager.getFamily();
+            if (family?.homeAdcode) {
+              params.city = family.homeAdcode;
+            } else if (family?.homeCity) {
+              params.city = family.homeCity;
             }
           }
           const toolResult = await this.pluginHost.executeTool(action.toolName, params);

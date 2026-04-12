@@ -44,11 +44,13 @@ function asText(value: unknown): string {
 }
 
 export function FamilyPage() {
-  const [family, setFamily] = useState<{ id: string; name: string; avatar?: string } | null>(null);
+  const [family, setFamily] = useState<{ id: string; name: string; avatar?: string; homeCity?: string; homeAdcode?: string } | null>(null);
   const [members, setMembers] = useState<Array<{ id: string; name: string }>>([]);
   const [savingFamily, setSavingFamily] = useState(false);
   const [editingFamilyInfo, setEditingFamilyInfo] = useState(false);
   const [familyNameDraft, setFamilyNameDraft] = useState("");
+  const [homeCityDraft, setHomeCityDraft] = useState("");
+  const [homeAdcodeDraft, setHomeAdcodeDraft] = useState("");
   const [familyAvatarFile, setFamilyAvatarFile] = useState<File | null>(null);
   const [familyAvatarPreview, setFamilyAvatarPreview] = useState<string | null>(null);
 
@@ -197,6 +199,8 @@ export function FamilyPage() {
 
   function openFamilyEditDialog() {
     setFamilyNameDraft(family?.name ?? "");
+    setHomeCityDraft(family?.homeCity ?? "");
+    setHomeAdcodeDraft(family?.homeAdcode ?? "");
     setFamilyAvatarFile(null);
     setFamilyAvatarPreview(family?.avatar ? api.avatarUrl(family.avatar) : null);
     setEditingFamilyInfo(true);
@@ -211,7 +215,11 @@ export function FamilyPage() {
       if (familyAvatarFile) {
         await api.uploadFamilyAvatar(familyAvatarFile);
       }
-      await api.updateFamily({ name: nextName });
+      await api.updateFamily({
+        name: nextName,
+        homeCity: homeCityDraft.trim() || undefined,
+        homeAdcode: homeAdcodeDraft.trim() || undefined,
+      });
       await loadFamily();
       setEditingFamilyInfo(false);
     } catch (err) {
@@ -248,7 +256,7 @@ export function FamilyPage() {
             )}
             <div className="min-w-0">
               <p className="text-base font-semibold text-stone-800 truncate">{family?.name ?? "未设置家庭名称"}</p>
-              <p className="text-xs text-stone-400 mt-0.5">{members.length} 位成员</p>
+              <p className="text-xs text-stone-400 mt-0.5">{members.length} 位成员 · 常居地 {family?.homeAdcode ?? family?.homeCity ?? "未设置"}</p>
             </div>
           </div>
           <button
@@ -474,6 +482,26 @@ export function FamilyPage() {
                   value={familyNameDraft}
                   onChange={(e) => setFamilyNameDraft(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-1">常居城市</label>
+                <input
+                  type="text"
+                  value={homeCityDraft}
+                  onChange={(e) => setHomeCityDraft(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  placeholder="例如：深圳"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-1">行政区编码（可选）</label>
+                <input
+                  type="text"
+                  value={homeAdcodeDraft}
+                  onChange={(e) => setHomeAdcodeDraft(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  placeholder="例如：440300"
                 />
               </div>
             </div>

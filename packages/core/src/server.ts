@@ -36,7 +36,6 @@ const CONFIG_PATCH_KEYS = new Set([
   "timezone",
   "setupCompleted",
   "butlerName",
-  "location",
   "plugins",
 ]);
 
@@ -161,14 +160,18 @@ export class NichijouServer {
       }
 
       if (path === "/api/family" && method === "POST") {
-        const body = await this.readBody(req) as { name: string };
-        const family = this.butler.familyManager.createFamily(body.name);
+        const body = await this.readBody(req) as { name: string; homeCity?: string; homeAdcode?: string };
+        const family = this.butler.familyManager.createFamily({
+          name: body.name,
+          homeCity: body.homeCity,
+          homeAdcode: body.homeAdcode,
+        });
         this.json(res, family);
         return;
       }
 
       if (path === "/api/family" && method === "PUT") {
-        const body = await this.readBody(req) as { name?: string; avatar?: string };
+        const body = await this.readBody(req) as { name?: string; avatar?: string; homeCity?: string; homeAdcode?: string };
         const family = this.butler.familyManager.updateFamily(body);
         this.json(res, { ok: true, family });
         return;
@@ -776,8 +779,13 @@ export class NichijouServer {
       // --- Board endpoints ---
       if (path === "/api/board/weather" && method === "GET") {
         const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
-        const cfgLoc = this.butler.config.get().location;
-        const city = url.searchParams.get("city") ?? cfgLoc?.name ?? "北京";
+        const family = this.butler.familyManager.getFamily();
+        const city = url.searchParams.get("city") ?? family?.homeAdcode ?? family?.homeCity ?? "";
+
+        if (!city) {
+          this.json(res, { temp: null, description: "未配置家庭常居地", weatherCode: -1, tempMax: null, tempMin: null, location: "" });
+          return;
+        }
 
         if (weatherCache && Date.now() - weatherCache.fetchedAt < WEATHER_CACHE_TTL) {
           this.json(res, weatherCache.data);
@@ -785,17 +793,17 @@ export class NichijouServer {
         }
 
         try {
-          const nowResult = await this.butler.pluginHost.executeTool("weather_now", { city });
-
-          const lines = nowResult.content.split("\n");
-          const locLine = lines.find((l) => l.startsWith("\u{1F4CD}"));
-          const tempLine = lines.find((l) => l.startsWith("\u{1F321}"));
-          const descMatch = tempLine?.match(/· (.+)/);
-          const description = descMatch ? descMatch[1]! : "未知";
-          const tempMatch = tempLine?.match(/([-\d]+)°C/);
-          const temp = tempMatch ? parseInt(tempMatch[1]!) : null;
-
-          const location = locLine?.replace("\u{1F4CD} ", "") ?? "";
+          const nowResult = await this.butler.pluginHost.executeTool("weather_query", { city });
+          if (nowResult.isError) {
+            throw new Error(nowResult.content);
+          }
+          const raw = JSON.parse(nowResult.content) as {
+            lives?: Array<{ province?: string; city?: string; weather?: string; temperature?: string }>;
+          };
+          const live = raw.lives?.[0];
+          const description = live?.weather ?? "未知";
+          const temp = live?.temperature ? parseInt(live.temperature, 10) : null;
+          const location = [live?.province, live?.city].filter(Boolean).join(" ");
 
           const codeMap: Record<string, number> = {
             "晴": 0, "大部晴朗": 1, "局部多云": 2, "多云": 3,

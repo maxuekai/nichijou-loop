@@ -68,6 +68,8 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
   const [llmResult, setLlmResult] = useState<{ ok: boolean; error?: string } | null>(null);
 
   const [familyName, setFamilyName] = useState("我的家");
+  const [homeCity, setHomeCity] = useState("");
+  const [homeAdcode, setHomeAdcode] = useState("");
   const [adminName, setAdminName] = useState("");
 
   const [soulContent, setSoulContent] = useState(SOUL_TEMPLATES[0]!.content);
@@ -88,7 +90,11 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
 
   async function finishSetup() {
     await api.updateConfig({ llm: llmConfig });
-    await api.createFamily(familyName);
+    await api.createFamily({
+      name: familyName,
+      homeCity: homeCity.trim() || undefined,
+      homeAdcode: homeAdcode.trim() || undefined,
+    });
     if (adminName) {
       await api.addMember(adminName, "admin");
     }
@@ -217,6 +223,26 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
                   placeholder="爸爸 / 妈妈 / ..."
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">家庭常居城市（用于天气等工具）</label>
+                <input
+                  type="text"
+                  value={homeCity}
+                  onChange={(e) => setHomeCity(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  placeholder="例如：深圳"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">常居地行政区编码（可选）</label>
+                <input
+                  type="text"
+                  value={homeAdcode}
+                  onChange={(e) => setHomeAdcode(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  placeholder="例如：440300"
+                />
+              </div>
             </div>
           )}
 
@@ -256,6 +282,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
               <div className="bg-stone-50 rounded-lg p-4 text-left text-sm text-stone-600 space-y-1">
                 <p>AI 模型：{llmConfig.model} @ {llmConfig.baseUrl}</p>
                 <p>家庭：{familyName}</p>
+                <p>常居地：{homeAdcode || homeCity || "未设置"}</p>
                 <p>管理员：{adminName || "默认用户"}</p>
               </div>
             </div>

@@ -44,6 +44,8 @@ export interface Family {
   name: string;
   createdAt: string;
   avatar?: string;
+  homeCity?: string;
+  homeAdcode?: string;
 }
 
 export interface FamilyMember {

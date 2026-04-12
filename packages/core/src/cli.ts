@@ -456,7 +456,7 @@ async function cmdDev(): Promise<void> {
 
   let family = butler.familyManager.getFamily();
   if (!family) {
-    family = butler.familyManager.createFamily("我的家");
+    family = butler.familyManager.createFamily({ name: "我的家" });
     console.log(`创建了默认家庭「${family.name}」`);
   }
 
@@ -495,7 +495,7 @@ async function cmdRepl(): Promise<void> {
 
   let family = butler.familyManager.getFamily();
   if (!family) {
-    family = butler.familyManager.createFamily("我的家");
+    family = butler.familyManager.createFamily({ name: "我的家" });
     console.log(`\n创建了家庭「${family.name}」`);
   }
 
@@ -601,7 +601,7 @@ async function serve(): Promise<void> {
 
   let family = butler.familyManager.getFamily();
   if (!family) {
-    family = butler.familyManager.createFamily("我的家");
+    family = butler.familyManager.createFamily({ name: "我的家" });
   }
 
   await butler.registerPlugins();

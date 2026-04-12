@@ -25,13 +25,13 @@ export const api = {
     request("/config", { method: "PUT", body: JSON.stringify(data) }),
 
   getFamily: () => request<{
-    family: { id: string; name: string; avatar?: string } | null;
+    family: { id: string; name: string; avatar?: string; homeCity?: string; homeAdcode?: string } | null;
     members: Array<{ id: string; name: string; role: string }>;
   }>("/family"),
-  createFamily: (name: string) =>
-    request("/family", { method: "POST", body: JSON.stringify({ name }) }),
-  updateFamily: (data: { name?: string; avatar?: string }) =>
-    request<{ ok: boolean; family: { id: string; name: string; avatar?: string } }>("/family", { method: "PUT", body: JSON.stringify(data) }),
+  createFamily: (data: { name: string; homeCity?: string; homeAdcode?: string }) =>
+    request("/family", { method: "POST", body: JSON.stringify(data) }),
+  updateFamily: (data: { name?: string; avatar?: string; homeCity?: string; homeAdcode?: string }) =>
+    request<{ ok: boolean; family: { id: string; name: string; avatar?: string; homeCity?: string; homeAdcode?: string } }>("/family", { method: "PUT", body: JSON.stringify(data) }),
 
   addMember: (name: string, role = "member") =>
     request("/members", { method: "POST", body: JSON.stringify({ name, role }) }),
@@ -95,8 +95,8 @@ export const api = {
       pid: number;
     }>("/system-info"),
 
-  getWeather: (lat = "39.9", lon = "116.4") =>
-    request<{ temp: number | null; tempMax: number | null; tempMin: number | null; weatherCode: number; description: string; location: string }>(`/board/weather?lat=${lat}&lon=${lon}`),
+  getWeather: () =>
+    request<{ temp: number | null; tempMax: number | null; tempMin: number | null; weatherCode: number; description: string; location: string }>("/board/weather"),
 
   getWeekSchedule: () =>
     request<{ schedule: Record<string, Record<string, string[]>> }>("/board/week-schedule"),

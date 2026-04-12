@@ -16,11 +16,13 @@ export class FamilyManager {
     return yaml.load(content) as Family;
   }
 
-  createFamily(name: string): Family {
+  createFamily(input: { name: string; homeCity?: string; homeAdcode?: string }): Family {
     const family: Family = {
       id: generateId("fam"),
-      name,
+      name: input.name,
       createdAt: new Date().toISOString(),
+      homeCity: input.homeCity,
+      homeAdcode: input.homeAdcode,
     };
     this.storage.writeText("family/family.yaml", yaml.dump(family));
     return family;
