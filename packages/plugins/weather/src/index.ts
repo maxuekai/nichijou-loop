@@ -1,100 +1,127 @@
 import { definePlugin } from "@nichijou/plugin-sdk";
 
-const WMO_DESCRIPTIONS: Record<number, string> = {
-  0: "晴", 1: "大部晴朗", 2: "局部多云", 3: "多云",
-  45: "雾", 48: "雾凇", 51: "小毛毛雨", 53: "毛毛雨", 55: "大毛毛雨",
-  61: "小雨", 63: "中雨", 65: "大雨", 66: "冻雨", 67: "大冻雨",
-  71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
-  80: "阵雨", 81: "中阵雨", 82: "大阵雨",
-  85: "小阵雪", 86: "大阵雪", 95: "雷暴", 96: "雷暴伴冰雹", 99: "强雷暴伴冰雹",
-};
-
-const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-
-function describeCode(code: number): string {
-  return WMO_DESCRIPTIONS[code] ?? "未知";
+interface AmapLive {
+  province: string;
+  city: string;
+  adcode: string;
+  weather: string;
+  temperature: string;
+  winddirection: string;
+  windpower: string;
+  humidity: string;
+  reporttime: string;
 }
 
-interface OpenMeteoResponse {
-  current?: { temperature_2m: number; weather_code: number };
-  daily?: {
-    time: string[];
-    temperature_2m_max: number[];
-    temperature_2m_min: number[];
-    weather_code: number[];
-    precipitation_probability_max?: number[];
-    sunrise?: string[];
-    sunset?: string[];
-  };
+interface AmapCast {
+  date: string;
+  week: string;
+  dayweather: string;
+  nightweather: string;
+  daytemp: string;
+  nighttemp: string;
+  daywind: string;
+  nightwind: string;
+  daypower: string;
+  nightpower: string;
 }
 
-async function fetchOpenMeteo(lat: string, lon: string, forecastDays: number, includeCurrent: boolean): Promise<OpenMeteoResponse> {
-  const parts = [
-    `latitude=${lat}`,
-    `longitude=${lon}`,
-    `daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,sunrise,sunset`,
-    `timezone=auto`,
-    `forecast_days=${forecastDays}`,
-  ];
-  if (includeCurrent) {
-    parts.push("current=temperature_2m,weather_code");
+interface AmapForecast {
+  city: string;
+  adcode: string;
+  province: string;
+  reporttime: string;
+  casts: AmapCast[];
+}
+
+interface AmapWeatherResp {
+  status: string;
+  count: string;
+  info: string;
+  infocode: string;
+  lives?: AmapLive[];
+  forecasts?: AmapForecast[];
+}
+
+interface AmapGeoResp {
+  status: string;
+  geocodes?: { adcode: string; city: string }[];
+}
+
+const WEEKDAY_NAMES = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+function resolveKey(params: Record<string, unknown>): string {
+  const key = (params.amapKey as string) || process.env.AMAP_API_KEY || "";
+  if (!key) throw new Error("高德地图 API Key 未配置。请在管理后台「插件管理」中配置天气插件的 amapKey，或设置环境变量 AMAP_API_KEY。");
+  return key;
+}
+
+async function resolveAdcode(city: string, key: string): Promise<string> {
+  if (/^\d{6}$/.test(city)) return city;
+
+  const url = `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(city)}&key=${key}`;
+  const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!resp.ok) throw new Error(`高德地理编码请求失败: ${resp.status}`);
+  const data = (await resp.json()) as AmapGeoResp;
+  if (data.status !== "1" || !data.geocodes?.length) {
+    throw new Error(`无法识别城市「${city}」，请使用城市名称或 6 位行政区划编码 (adcode)`);
   }
-  const url = `https://api.open-meteo.com/v1/forecast?${parts.join("&")}`;
-  const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!resp.ok) throw new Error(`Open-Meteo API error: ${resp.status}`);
-  return resp.json() as Promise<OpenMeteoResponse>;
+  return data.geocodes[0]!.adcode;
 }
 
-async function reverseGeocode(lat: string, lon: string): Promise<string> {
-  try {
-    const resp = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=zh&zoom=10`,
-      { signal: AbortSignal.timeout(5000), headers: { "User-Agent": "NichijouLoop/1.0" } },
-    );
-    const json = await resp.json() as { address?: { city?: string; town?: string; county?: string; state?: string; suburb?: string; district?: string } };
-    const addr = json.address;
-    if (addr) return addr.city || addr.town || addr.county || addr.district || addr.suburb || addr.state || "";
-  } catch { /* optional */ }
-  return "";
+async function fetchWeather(adcode: string, key: string, extensions: "base" | "all"): Promise<AmapWeatherResp> {
+  const url = `https://restapi.amap.com/v3/weather/weatherInfo?city=${adcode}&key=${key}&extensions=${extensions}`;
+  const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!resp.ok) throw new Error(`高德天气 API 请求失败: ${resp.status}`);
+  const data = (await resp.json()) as AmapWeatherResp;
+  if (data.status !== "1") {
+    throw new Error(`高德天气查询失败: ${data.info} (${data.infocode})`);
+  }
+  return data;
 }
 
 export default definePlugin({
   id: "weather",
   name: "天气助手",
-  description: "天气查询、多日天气预报，支持 1-16 天范围查询",
-  version: "0.1.0",
+  description: "基于高德地图 API 的天气查询，支持实况天气和未来 3 天预报",
+  version: "0.2.0",
+
+  configSchema: {
+    amapKey: {
+      type: "string",
+      description: "高德地图 Web 服务 API Key",
+      required: true,
+    },
+  },
 
   tools: [
     {
       name: "weather_now",
-      description: "获取当前实时天气，返回气温、天气描述和城市名。",
+      description:
+        "获取指定城市的实况天气，返回气温、天气状况、风向风力、湿度。" +
+        "参数 city 可以是城市名（如「深圳」「北京市」）或 6 位行政区划编码 (adcode)。",
       parameters: {
         type: "object",
         properties: {
-          lat: { type: "string", description: "纬度" },
-          lon: { type: "string", description: "经度" },
+          city: { type: "string", description: "城市名称或 adcode，例如 \"深圳\" 或 \"440300\"" },
         },
+        required: ["city"],
       },
       execute: async (params) => {
-        const lat = (params.lat as string) || "39.9";
-        const lon = (params.lon as string) || "116.4";
-
         try {
-          const data = await fetchOpenMeteo(lat, lon, 1, true);
-          const location = await reverseGeocode(lat, lon);
-          const temp = Math.round(data.current!.temperature_2m);
-          const desc = describeCode(data.current!.weather_code);
-          const tMax = Math.round(data.daily!.temperature_2m_max[0]!);
-          const tMin = Math.round(data.daily!.temperature_2m_min[0]!);
-          const precip = data.daily!.precipitation_probability_max?.[0] ?? 0;
+          const key = resolveKey(params);
+          const city = (params.city as string) || "北京";
+          const adcode = await resolveAdcode(city, key);
+          const data = await fetchWeather(adcode, key, "base");
+          const live = data.lives?.[0];
+          if (!live) return { content: "未获取到实况天气数据", isError: true };
 
           const lines = [
-            `📍 ${location || "当前位置"}`,
-            `🌡 ${temp}°C · ${desc}`,
-            `↕ ${tMin}° / ${tMax}°`,
+            `📍 ${live.province} ${live.city}`,
+            `🌡 ${live.temperature}°C · ${live.weather}`,
+            `💨 ${live.winddirection}风 ${live.windpower}级`,
+            `💧 湿度 ${live.humidity}%`,
+            `🕐 数据发布: ${live.reporttime}`,
           ];
-          if (precip > 0) lines.push(`🌧 降水概率 ${precip}%`);
-
           return { content: lines.join("\n") };
         } catch (err) {
           return { content: `获取天气失败: ${err instanceof Error ? err.message : String(err)}`, isError: true };
@@ -104,59 +131,42 @@ export default definePlugin({
     {
       name: "weather_forecast",
       description:
-        "获取天气预报。支持查询今天、明天、或未来最多16天的天气。" +
-        "参数 startDay: 0=今天 1=明天 2=后天…；days: 查询天数 1-16。" +
-        "例如：查明天天气用 startDay=1,days=1；查未来一周用 startDay=1,days=7。",
+        "获取指定城市未来天气预报（今天 + 未来 3 天，共 4 天）。" +
+        "参数 city 可以是城市名（如「深圳」「北京市」）或 6 位行政区划编码 (adcode)。",
       parameters: {
         type: "object",
         properties: {
-          lat: { type: "string", description: "纬度" },
-          lon: { type: "string", description: "经度" },
-          days: { type: "number", description: "预报天数，1-16，默认 1" },
-          startDay: { type: "number", description: "从第几天开始，0=今天 1=明天，默认 0" },
+          city: { type: "string", description: "城市名称或 adcode，例如 \"深圳\" 或 \"440300\"" },
         },
+        required: ["city"],
       },
       execute: async (params) => {
-        const lat = (params.lat as string) || "39.9";
-        const lon = (params.lon as string) || "116.4";
-        const days = Math.min(16, Math.max(1, (params.days as number) || 1));
-        const startDay = Math.max(0, (params.startDay as number) || 0);
-        const forecastDays = startDay + days;
-
-        if (forecastDays > 16) {
-          return { content: "最多支持16天预报，请调整 startDay 和 days 参数", isError: true };
-        }
-
         try {
-          const data = await fetchOpenMeteo(lat, lon, forecastDays, false);
-          const daily = data.daily!;
-          const location = await reverseGeocode(lat, lon);
+          const key = resolveKey(params);
+          const city = (params.city as string) || "北京";
+          const adcode = await resolveAdcode(city, key);
+          const data = await fetchWeather(adcode, key, "all");
+          const forecast = data.forecasts?.[0];
+          if (!forecast) return { content: "未获取到天气预报数据", isError: true };
 
-          const lines: string[] = [];
-          if (location) lines.push(`📍 ${location} 天气预报`);
-          lines.push("");
+          const lines = [`📍 ${forecast.province} ${forecast.city} 天气预报`, ""];
 
-          for (let i = startDay; i < startDay + days && i < daily.time.length; i++) {
-            const date = daily.time[i]!;
-            const dow = WEEKDAY_NAMES[new Date(date + "T00:00:00").getDay()]!;
-            const tMax = Math.round(daily.temperature_2m_max[i]!);
-            const tMin = Math.round(daily.temperature_2m_min[i]!);
-            const desc = describeCode(daily.weather_code[i]!);
-            const precip = daily.precipitation_probability_max?.[i] ?? 0;
-            const sunrise = daily.sunrise?.[i]?.slice(11, 16) ?? "";
-            const sunset = daily.sunset?.[i]?.slice(11, 16) ?? "";
+          for (const cast of forecast.casts) {
+            const weekday = WEEKDAY_NAMES[Number(cast.week)] ?? "";
+            const dayLabel = `${cast.date} ${weekday}`;
 
-            let dayLabel = `${date} ${dow}`;
-            if (i === 0) dayLabel += "（今天）";
-            else if (i === 1) dayLabel += "（明天）";
-            else if (i === 2) dayLabel += "（后天）";
-
-            let line = `${dayLabel}：${desc}，${tMin}°~${tMax}°C`;
-            if (precip > 0) line += `，降水${precip}%`;
-            if (sunrise && sunset) line += `，日出${sunrise} 日落${sunset}`;
+            let line = `${dayLabel}：`;
+            if (cast.dayweather === cast.nightweather) {
+              line += cast.dayweather;
+            } else {
+              line += `${cast.dayweather}转${cast.nightweather}`;
+            }
+            line += `，${cast.nighttemp}°~${cast.daytemp}°C`;
+            line += `，${cast.daywind}风${cast.daypower}级`;
             lines.push(line);
           }
 
+          lines.push("", `🕐 数据发布: ${forecast.reporttime}`);
           return { content: lines.join("\n") };
         } catch (err) {
           return { content: `获取天气预报失败: ${err instanceof Error ? err.message : String(err)}`, isError: true };

@@ -21,6 +21,13 @@ export interface DashboardWidget {
   defaultSize: "small" | "medium" | "large";
 }
 
+export interface PluginConfigField {
+  type: "string" | "number" | "boolean";
+  description: string;
+  required?: boolean;
+  default?: unknown;
+}
+
 export interface NichijouPlugin {
   id: string;
   name: string;
@@ -28,6 +35,7 @@ export interface NichijouPlugin {
   version: string;
 
   tools: ToolDefinition[];
+  configSchema?: Record<string, PluginConfigField>;
 
   onInstall?(ctx: PluginContext): Promise<void>;
   onUninstall?(ctx: PluginContext): Promise<void>;

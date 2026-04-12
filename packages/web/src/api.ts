@@ -175,7 +175,17 @@ export const api = {
       version: string;
       enabled: boolean;
       tools: Array<{ name: string; description: string }>;
+      configSchema: Record<string, { type: string; description: string; required?: boolean; default?: unknown }> | null;
     }>>("/plugins"),
+
+  getPluginConfig: (pluginId: string) =>
+    request<{
+      config: Record<string, unknown>;
+      configSchema: Record<string, { type: string; description: string; required?: boolean; default?: unknown }> | null;
+    }>(`/plugins/${pluginId}/config`),
+
+  updatePluginConfig: (pluginId: string, config: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/plugins/${pluginId}/config`, { method: "PUT", body: JSON.stringify(config) }),
 
   // --- Geo ---
 

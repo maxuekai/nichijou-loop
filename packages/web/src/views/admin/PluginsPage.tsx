@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 
+interface PluginConfigField {
+  type: string;
+  description: string;
+  required?: boolean;
+  default?: unknown;
+}
+
 interface PluginTool {
   name: string;
   description: string;
@@ -13,26 +20,22 @@ interface PluginInfo {
   version: string;
   enabled: boolean;
   tools: PluginTool[];
-}
-
-interface LocationConfig {
-  lat: string;
-  lon: string;
-  name?: string;
+  configSchema: Record<string, PluginConfigField> | null;
 }
 
 export function PluginsPage() {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [location, setLocation] = useState<LocationConfig>({ lat: "", lon: "" });
-  const [locationSaving, setLocationSaving] = useState(false);
-  const [locationSaved, setLocationSaved] = useState(false);
-  const [detecting, setDetecting] = useState(false);
+
+  const [editingConfigFor, setEditingConfigFor] = useState<string | null>(null);
+  const [configValues, setConfigValues] = useState<Record<string, unknown>>({});
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configSaved, setConfigSaved] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   useEffect(() => {
     loadPlugins();
-    loadConfig();
   }, []);
 
   async function loadPlugins() {
@@ -46,42 +49,86 @@ export function PluginsPage() {
     }
   }
 
-  async function loadConfig() {
-    try {
-      const config = await api.getConfig();
-      const loc = config.location as LocationConfig | undefined;
-      if (loc) setLocation(loc);
-    } catch { /* ignore */ }
-  }
-
   function toggleExpand(id: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+        if (editingConfigFor === id) setEditingConfigFor(null);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }
 
-  async function saveLocation() {
-    setLocationSaving(true);
-    setLocationSaved(false);
+  async function loadPluginConfig(pluginId: string) {
+    setConfigError(null);
     try {
-      await api.updateConfig({ location });
-      setLocationSaved(true);
-      setTimeout(() => setLocationSaved(false), 2000);
-    } catch { /* ignore */ }
-    setLocationSaving(false);
+      const data = await api.getPluginConfig(pluginId);
+      setConfigValues(data.config ?? {});
+      setEditingConfigFor(pluginId);
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : "加载配置失败");
+    }
   }
 
-  async function detectLocation() {
-    setDetecting(true);
+  async function savePluginConfig(pluginId: string) {
+    setConfigSaving(true);
+    setConfigSaved(false);
+    setConfigError(null);
     try {
-      const result = await api.detectLocation();
-      if (result.lat && result.lon) {
-        setLocation({ lat: result.lat, lon: result.lon, name: result.name || undefined });
-      }
-    } catch { /* ignore */ }
-    setDetecting(false);
+      await api.updatePluginConfig(pluginId, configValues);
+      setConfigSaved(true);
+      setTimeout(() => setConfigSaved(false), 2000);
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : "保存失败");
+    }
+    setConfigSaving(false);
+  }
+
+  function updateConfigField(key: string, value: unknown) {
+    setConfigValues((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function renderConfigField(key: string, field: PluginConfigField) {
+    const value = configValues[key];
+
+    if (field.type === "boolean") {
+      return (
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={!!value}
+            onChange={(e) => updateConfigField(key, e.target.checked)}
+            className="w-4 h-4 rounded border-stone-300 text-amber-500 focus:ring-amber-500/20"
+          />
+          <span className="text-sm text-stone-700">{field.description}</span>
+        </label>
+      );
+    }
+
+    if (field.type === "number") {
+      return (
+        <input
+          type="number"
+          value={value != null ? String(value) : ""}
+          onChange={(e) => updateConfigField(key, e.target.value ? Number(e.target.value) : undefined)}
+          placeholder={field.default != null ? String(field.default) : ""}
+          className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+        />
+      );
+    }
+
+    return (
+      <input
+        type="text"
+        value={value != null ? String(value) : ""}
+        onChange={(e) => updateConfigField(key, e.target.value || undefined)}
+        placeholder={field.default != null ? String(field.default) : ""}
+        className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+      />
+    );
   }
 
   return (
@@ -111,7 +158,6 @@ export function PluginsPage() {
           </p>
           <p className="text-xs text-stone-400 mt-2">
             <code className="px-1.5 py-0.5 bg-stone-200 rounded text-stone-600">nichijou plugin install @nichijou/plugin-weather</code>
-            （需先发布到 npm，或使用 <code className="px-1.5 py-0.5 bg-stone-200 rounded text-stone-600">file:/绝对路径</code> 指向本地插件包）
           </p>
           <p className="text-xs text-stone-400 mt-2">修改配置或安装后请重启服务。</p>
         </div>
@@ -173,61 +219,54 @@ export function PluginsPage() {
                   ))}
                 </div>
 
-                {/* Weather plugin location config */}
-                {plugin.id === "weather" && (
+                {plugin.configSchema && Object.keys(plugin.configSchema).length > 0 && (
                   <div className="mt-5 pt-5 border-t border-stone-200">
-                    <h4 className="text-xs font-medium text-stone-500 mb-3">位置配置</h4>
-                    <p className="text-xs text-stone-400 mb-3">用于天气查询的默认位置</p>
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs text-stone-500 mb-1">纬度</label>
-                          <input
-                            type="text"
-                            value={location.lat}
-                            onChange={(e) => setLocation({ ...location, lat: e.target.value })}
-                            placeholder="如 23.3"
-                            className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-stone-500 mb-1">经度</label>
-                          <input
-                            type="text"
-                            value={location.lon}
-                            onChange={(e) => setLocation({ ...location, lon: e.target.value })}
-                            placeholder="如 116.4"
-                            className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-xs text-stone-500 mb-1">地名（可选）</label>
-                        <input
-                          type="text"
-                          value={location.name ?? ""}
-                          onChange={(e) => setLocation({ ...location, name: e.target.value || undefined })}
-                          placeholder="如 北京"
-                          className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-xs font-medium text-stone-500">插件配置</h4>
+                      {editingConfigFor !== plugin.id && (
                         <button
-                          onClick={detectLocation}
-                          disabled={detecting}
-                          className="px-4 py-2 rounded-lg border border-stone-300 text-sm text-stone-600 hover:bg-stone-100 disabled:opacity-50 transition-colors cursor-pointer"
+                          onClick={() => { void loadPluginConfig(plugin.id); }}
+                          className="text-xs text-amber-600 hover:text-amber-700 cursor-pointer"
                         >
-                          {detecting ? "检测中..." : "自动检测位置"}
+                          编辑配置
                         </button>
-                        <button
-                          onClick={saveLocation}
-                          disabled={locationSaving}
-                          className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors cursor-pointer"
-                        >
-                          {locationSaving ? "保存中..." : locationSaved ? "已保存" : "保存位置"}
-                        </button>
-                      </div>
+                      )}
                     </div>
+
+                    {editingConfigFor === plugin.id && (
+                      <div className="space-y-4">
+                        {Object.entries(plugin.configSchema!).map(([key, field]) => (
+                          <div key={key}>
+                            <label className="block text-xs text-stone-600 mb-1">
+                              {key}
+                              {field.required && <span className="text-red-400 ml-0.5">*</span>}
+                            </label>
+                            <p className="text-xs text-stone-400 mb-1.5">{field.description}</p>
+                            {renderConfigField(key, field)}
+                          </div>
+                        ))}
+
+                        {configError && (
+                          <p className="text-xs text-red-600">{configError}</p>
+                        )}
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => { void savePluginConfig(plugin.id); }}
+                            disabled={configSaving}
+                            className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors cursor-pointer"
+                          >
+                            {configSaving ? "保存中..." : configSaved ? "已保存" : "保存配置"}
+                          </button>
+                          <button
+                            onClick={() => setEditingConfigFor(null)}
+                            className="px-4 py-2 rounded-lg border border-stone-300 text-sm text-stone-600 hover:bg-stone-100 transition-colors cursor-pointer"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -235,7 +274,6 @@ export function PluginsPage() {
           </div>
         ))}
       </div>
-
     </div>
   );
 }

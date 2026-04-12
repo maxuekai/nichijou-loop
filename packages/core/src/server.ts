@@ -16,14 +16,6 @@ interface WeatherCache {
 const WEATHER_CACHE_TTL = 30 * 60 * 1000;
 let weatherCache: WeatherCache | null = null;
 
-const WMO_DESCRIPTIONS: Record<number, string> = {
-  0: "晴", 1: "大部晴朗", 2: "局部多云", 3: "多云",
-  45: "雾", 48: "雾凇", 51: "小毛毛雨", 53: "毛毛雨", 55: "大毛毛雨",
-  61: "小雨", 63: "中雨", 65: "大雨", 66: "冻雨", 67: "大冻雨",
-  71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
-  80: "阵雨", 81: "中阵雨", 82: "大阵雨",
-  85: "小阵雪", 86: "大阵雪", 95: "雷暴", 96: "雷暴伴冰雹", 99: "强雷暴伴冰雹",
-};
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -672,6 +664,7 @@ export class NichijouServer {
           version: p.version,
           enabled: this.butler.pluginHost.isEnabled(p.id),
           tools: p.tools.map((t) => ({ name: t.name, description: t.description })),
+          configSchema: p.configSchema ?? null,
         }));
         this.json(res, plugins);
         return;
@@ -680,6 +673,31 @@ export class NichijouServer {
       if (path === "/api/plugins/tools" && method === "GET") {
         this.json(res, this.butler.pluginHost.getAvailableTools());
         return;
+      }
+
+      {
+        const pluginConfigMatch = path.match(/^\/api\/plugins\/([^/]+)\/config$/);
+        if (pluginConfigMatch) {
+          const pluginId = pluginConfigMatch[1]!;
+          const plugin = this.butler.pluginHost.getPlugin(pluginId);
+          if (!plugin) {
+            this.json(res, { error: `plugin not found: ${pluginId}` }, 404);
+            return;
+          }
+          if (method === "GET") {
+            this.json(res, {
+              config: this.butler.pluginHost.getPluginConfig(pluginId),
+              configSchema: plugin.configSchema ?? null,
+            });
+            return;
+          }
+          if (method === "PUT") {
+            const body = await this.readBody(req);
+            this.butler.pluginHost.setPluginConfig(pluginId, body as Record<string, unknown>);
+            this.json(res, { ok: true });
+            return;
+          }
+        }
       }
 
       // --- Geo API ---
@@ -704,8 +722,7 @@ export class NichijouServer {
       if (path === "/api/board/weather" && method === "GET") {
         const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
         const cfgLoc = this.butler.config.get().location;
-        const lat = url.searchParams.get("lat") ?? cfgLoc?.lat ?? "39.9";
-        const lon = url.searchParams.get("lon") ?? cfgLoc?.lon ?? "116.4";
+        const city = url.searchParams.get("city") ?? cfgLoc?.name ?? "北京";
 
         if (weatherCache && Date.now() - weatherCache.fetchedAt < WEATHER_CACHE_TTL) {
           this.json(res, weatherCache.data);
@@ -713,24 +730,17 @@ export class NichijouServer {
         }
 
         try {
-          const [nowResult, forecastResult] = await Promise.all([
-            this.butler.pluginHost.executeTool("weather_now", { lat, lon }),
-            this.butler.pluginHost.executeTool("weather_forecast", { lat, lon, days: 1, startDay: 0 }),
-          ]);
+          const nowResult = await this.butler.pluginHost.executeTool("weather_now", { city });
 
           const lines = nowResult.content.split("\n");
           const locLine = lines.find((l) => l.startsWith("\u{1F4CD}"));
           const tempLine = lines.find((l) => l.startsWith("\u{1F321}"));
-          const rangeLine = lines.find((l) => l.startsWith("\u2195"));
-
-          const location = locLine?.replace("\u{1F4CD} ", "") ?? "";
-          const tempMatch = tempLine?.match(/([-\d]+)°C/);
-          const temp = tempMatch ? parseInt(tempMatch[1]!) : null;
           const descMatch = tempLine?.match(/· (.+)/);
           const description = descMatch ? descMatch[1]! : "未知";
-          const rangeMatch = rangeLine?.match(/([-\d]+)° \/ ([-\d]+)°/);
-          const tempMin = rangeMatch ? parseInt(rangeMatch[1]!) : null;
-          const tempMax = rangeMatch ? parseInt(rangeMatch[2]!) : null;
+          const tempMatch = tempLine?.match(/([-\d]+)°C/);
+          const temp = tempMatch ? parseInt(tempMatch[1]!) : null;
+
+          const location = locLine?.replace("\u{1F4CD} ", "") ?? "";
 
           const codeMap: Record<string, number> = {
             "晴": 0, "大部晴朗": 1, "局部多云": 2, "多云": 3,
@@ -739,7 +749,7 @@ export class NichijouServer {
           };
           const weatherCode = codeMap[description] ?? 0;
 
-          const data = { temp, tempMax, tempMin, weatherCode, description, location };
+          const data = { temp, tempMax: null as number | null, tempMin: null as number | null, weatherCode, description, location };
           weatherCache = { data: data as WeatherCache["data"], fetchedAt: Date.now() };
           this.json(res, data);
         } catch {
