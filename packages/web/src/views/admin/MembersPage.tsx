@@ -1,6 +1,25 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
+import {
+  TrashIcon,
+  PencilIcon,
+  CogIcon,
+  XMarkIcon,
+  ChevronDownIcon,
+  InformationCircleIcon,
+  ExclamationTriangleIcon,
+} from "@heroicons/react/24/outline";
+import { createIconWrapper } from "../../components/ui/Icon";
+
+// 创建包装过的图标组件
+const DeleteIcon = createIconWrapper(TrashIcon);
+const EditIcon = createIconWrapper(PencilIcon);
+const SettingsIcon = createIconWrapper(CogIcon);
+const CloseIcon = createIconWrapper(XMarkIcon);
+const ChevronIcon = createIconWrapper(ChevronDownIcon);
+const InfoIcon = createIconWrapper(InformationCircleIcon);
+const WarningIcon = createIconWrapper(ExclamationTriangleIcon);
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
 
@@ -485,9 +504,7 @@ export function MembersPage() {
                   className="opacity-0 group-hover:opacity-100 p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-red-50 transition-all"
                   title="删除成员"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
+                  <DeleteIcon size="md" />
                 </button>
               </div>
             </div>
@@ -519,10 +536,7 @@ export function MembersPage() {
                   onClick={openMemberEditDialog}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-stone-700 bg-stone-100 hover:bg-stone-200 transition-colors"
                 >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
+                  <SettingsIcon size="sm" />
                   设置
                 </button>
               </div>
@@ -614,9 +628,7 @@ export function MembersPage() {
                           onClick={() => setShowAiInput(false)}
                           className="p-1 rounded text-stone-400 hover:text-stone-600 transition-colors"
                         >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
+                          <CloseIcon size="md" />
                         </button>
                       </div>
                       <textarea
@@ -744,9 +756,7 @@ export function MembersPage() {
                                 className="p-1.5 rounded-md text-stone-400 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
                                 title="编辑"
                               >
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
+                                <EditIcon size="md" />
                               </button>
                               <button
                                 onClick={() => {
@@ -755,9 +765,7 @@ export function MembersPage() {
                                 className="p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-red-50 transition-colors"
                                 title={routine.assigneeMemberIds ? "请在家庭页面删除" : "删除"}
                               >
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
+                                <DeleteIcon size="md" />
                               </button>
                             </div>
                           </div>
@@ -806,9 +814,7 @@ export function MembersPage() {
                     className="flex items-center justify-between w-full text-left"
                   >
                     <h3 className="text-sm font-medium text-stone-500">最近执行记录</h3>
-                    <svg className={`w-4 h-4 text-stone-400 transition-transform ${logsExpanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                    </svg>
+                    <ChevronIcon size="md" className={`text-stone-400 transition-transform ${logsExpanded ? "rotate-180" : ""}`} />
                   </button>
                   {logsExpanded && (
                     <div className="mt-3">
@@ -915,9 +921,7 @@ export function MembersPage() {
                                 className="p-1.5 rounded-md text-stone-400 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
                                 title="编辑"
                               >
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
+                                <EditIcon size="md" />
                               </button>
                               <button
                                 onClick={() => {
@@ -926,9 +930,7 @@ export function MembersPage() {
                                 className="p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-red-50 transition-colors cursor-pointer"
                                 title={ovr.assigneeMemberIds ? "请在家庭页面删除" : "删除"}
                               >
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
+                                <DeleteIcon size="md" />
                               </button>
                             </div>
                           </div>
@@ -1201,9 +1203,7 @@ export function MembersPage() {
                         
                         <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
                           <div className="flex items-start gap-2">
-                            <svg className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
+                            <InfoIcon size="md" className="text-blue-600 mt-0.5 flex-shrink-0" />
                             <div className="text-xs text-blue-700">
                               <p className="font-medium mb-1">微信连接状态：已绑定</p>
                               <p>微信用户可以正常接收系统通知和提醒消息</p>
@@ -1214,9 +1214,7 @@ export function MembersPage() {
                     ) : (
                       <div className="p-4 rounded-lg border border-amber-200 bg-amber-50">
                         <div className="flex items-start gap-2">
-                          <svg className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                          </svg>
+                          <WarningIcon size="md" className="text-amber-600 mt-0.5 flex-shrink-0" />
                           <div className="text-xs text-amber-700">
                             <p className="font-medium mb-1">未绑定微信</p>
                             <p>该成员尚未绑定微信账号，无法接收微信通知</p>
@@ -1260,9 +1258,7 @@ export function MembersPage() {
                       
                       <div className="p-3 rounded-lg bg-yellow-50 border border-yellow-200">
                         <div className="flex items-start gap-2">
-                          <svg className="w-4 h-4 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                          </svg>
+                          <WarningIcon size="md" className="text-yellow-600 mt-0.5 flex-shrink-0" />
                           <div className="text-xs text-yellow-700">
                             <p className="font-medium mb-1">注意</p>
                             <p>清除上下文后，AI将不再记住之前的对话内容，但成员档案和习惯数据不会受影响。</p>

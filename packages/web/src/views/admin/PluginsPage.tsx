@@ -1,5 +1,14 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "../../api";
+import {
+  ChevronDownIcon,
+  CogIcon,
+} from "@heroicons/react/24/outline";
+import { createIconWrapper } from "../../components/ui/Icon";
+
+// 创建包装过的图标组件
+const ChevronIcon = createIconWrapper(ChevronDownIcon);
+const ToolIcon = createIconWrapper(CogIcon);
 
 interface PluginConfigField {
   type: string;
@@ -236,12 +245,10 @@ export function PluginsPage() {
                       plugin.enabled ? "translate-x-4" : "translate-x-0.5"
                     }`} />
                   </button>
-                  <svg
-                    className={`w-4 h-4 text-stone-400 transition-transform ${expanded.has(plugin.id) ? "rotate-180" : ""}`}
-                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                  </svg>
+                  <ChevronIcon 
+                    size="md"
+                    className={`text-stone-400 transition-transform ${expanded.has(plugin.id) ? "rotate-180" : ""}`}
+                  />
                 </div>
               </div>
 
@@ -258,10 +265,7 @@ export function PluginsPage() {
                     {plugin.tools.map((tool) => (
                       <div key={tool.name} className="flex items-start gap-2 p-3 rounded-lg bg-white border border-stone-100">
                         <span className="text-stone-400 mt-0.5">
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
+                          <ToolIcon size="md" />
                         </span>
                         <div>
                           <p className="text-sm font-medium text-stone-700">{tool.name}</p>

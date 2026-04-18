@@ -9,6 +9,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "lunar-javascript": "^1.7.7",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

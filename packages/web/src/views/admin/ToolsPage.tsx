@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import {
+  WrenchScrewdriverIcon,
+  ChevronDownIcon,
+} from "@heroicons/react/24/outline";
+import { createIconWrapper } from "../../components/ui/Icon";
+
+// 创建包装过的图标组件
+const ToolIcon = createIconWrapper(WrenchScrewdriverIcon);
+const ChevronIcon = createIconWrapper(ChevronDownIcon);
 
 interface ToolParam {
   type?: string;
@@ -119,9 +128,7 @@ export function ToolsPage() {
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                        <svg className="w-4 h-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17l-5.66-5.66a8 8 0 1111.32 0l-5.66 5.66zm0 0L12 21" />
-                        </svg>
+                        <ToolIcon size="md" className="text-blue-500" />
                       </div>
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-stone-800 font-mono">{tool.name}</p>
@@ -134,12 +141,10 @@ export function ToolsPage() {
                           {paramKeys.length} 参数
                         </span>
                       )}
-                      <svg
-                        className={`w-4 h-4 text-stone-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                        fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                      </svg>
+                      <ChevronIcon 
+                        size="md"
+                        className={`text-stone-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                      />
                     </div>
                   </div>
 
