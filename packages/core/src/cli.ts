@@ -463,6 +463,7 @@ async function cmdDev(): Promise<void> {
   await butler.registerPlugins();
   await butler.initWeChatChannel();
   butler.reminderScheduler.start();
+  butler.activityReminderScheduler.start();
   butler.actionExecutor.start();
 
   const server = new NichijouServer(butler);
@@ -607,6 +608,7 @@ async function serve(): Promise<void> {
   await butler.registerPlugins();
   await butler.initWeChatChannel();
   butler.reminderScheduler.start();
+  butler.activityReminderScheduler.start();
   butler.actionExecutor.start();
 
   const server = new NichijouServer(butler);

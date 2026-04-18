@@ -363,6 +363,17 @@ export class Database {
     return result.changes;
   }
 
+  getMemberLastMessageTimes(): { memberId: string; lastMessageTime: string }[] {
+    return this.db
+      .prepare(
+        `SELECT member_id as memberId, MAX(created_at) as lastMessageTime
+         FROM chat_history 
+         WHERE role = 'user' 
+         GROUP BY member_id`,
+      )
+      .all() as { memberId: string; lastMessageTime: string }[];
+  }
+
   close(): void {
     this.db.close();
   }

@@ -35,7 +35,7 @@ export const api = {
 
   addMember: (name: string, role = "member") =>
     request("/members", { method: "POST", body: JSON.stringify({ name, role }) }),
-  updateMember: (id: string, data: { name?: string; profile?: string }) =>
+  updateMember: (id: string, data: { name?: string; profile?: string; wechatNotifyEnabled?: boolean }) =>
     request<{ ok: boolean }>(`/members/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   getMember: (id: string) => request<{ member: Record<string, unknown>; profile: string }>(`/members/${id}`),
 

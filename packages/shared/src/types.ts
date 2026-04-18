@@ -56,6 +56,7 @@ export interface FamilyMember {
   primaryChannel: string;
   role: "admin" | "member";
   avatar?: string;
+  wechatNotifyEnabled?: boolean;
 }
 
 /** Routine types */

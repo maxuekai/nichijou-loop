@@ -19,6 +19,7 @@ import { createMemoryTools } from "./tools/memory-tools.js";
 import { createReminderTools } from "./tools/reminder-tools.js";
 import { createMessageTools } from "./tools/message-tools.js";
 import { ReminderScheduler } from "./reminder/reminder-scheduler.js";
+import { ActivityReminderScheduler } from "./reminder/activity-reminder.js";
 import { PluginHost } from "./plugin-host/plugin-host.js";
 import { resolvePluginImportUrl } from "./plugins/resolve-plugin.js";
 import { ActionExecutor } from "./routine/action-executor.js";
@@ -52,6 +53,7 @@ export class ButlerService {
   readonly gateway: Gateway;
 
   readonly reminderScheduler: ReminderScheduler;
+  readonly activityReminderScheduler: ActivityReminderScheduler;
   readonly pluginHost: PluginHost;
   readonly actionExecutor: ActionExecutor;
 
@@ -68,6 +70,7 @@ export class ButlerService {
     this.routineEngine = new RoutineEngine(this.storage);
     this.gateway = new Gateway(this.familyManager);
     this.reminderScheduler = new ReminderScheduler(this.db, this.gateway);
+    this.activityReminderScheduler = new ActivityReminderScheduler(this.db, this.gateway, this.familyManager);
     this.pluginHost = new PluginHost(this.storage);
     this.actionExecutor = new ActionExecutor(
       this.routineEngine, this.familyManager, this.pluginHost,
@@ -1135,6 +1138,7 @@ export class ButlerService {
   async shutdown(): Promise<void> {
     this.actionExecutor.stop();
     this.reminderScheduler.shutdown();
+    this.activityReminderScheduler.shutdown();
     await this.gateway.stopAll();
     this.db.close();
   }

@@ -70,6 +70,7 @@ export class FamilyManager {
       channelBindings: {},
       primaryChannel: "wechat",
       role: assignedRole,
+      wechatNotifyEnabled: true,
     };
 
     members.push(member);

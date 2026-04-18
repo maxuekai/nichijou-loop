@@ -513,6 +513,33 @@ export function MembersPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {/* WeChat activity reminder toggle */}
+                {detail.member.channelBindings.wechat && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-stone-50">
+                    <span className="text-xs font-medium text-stone-600">活跃提醒</span>
+                    <button
+                      onClick={async () => {
+                        if (!selectedId) return;
+                        try {
+                          const newValue = !detail.member.wechatNotifyEnabled;
+                          await api.updateMember(selectedId, { wechatNotifyEnabled: newValue });
+                          // Refresh member details
+                          const updated = await api.getMemberDetail(selectedId);
+                          setDetail(updated);
+                        } catch (err) {
+                          setPageError(err instanceof Error ? err.message : "更新活跃提醒设置失败");
+                        }
+                      }}
+                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors focus:outline-none ${
+                        detail.member.wechatNotifyEnabled ? "bg-green-500" : "bg-stone-300"
+                      } cursor-pointer`}
+                    >
+                      <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
+                        detail.member.wechatNotifyEnabled ? "translate-x-3.5" : "translate-x-0.5"
+                      }`} />
+                    </button>
+                  </div>
+                )}
                 <button
                   onClick={() => {
                     if (!selectedId) return;

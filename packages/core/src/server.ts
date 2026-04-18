@@ -205,13 +205,16 @@ export class NichijouServer {
 
       if (path.startsWith("/api/members/") && method === "PUT") {
         const memberId = path.split("/")[3]!;
-        const body = await this.readBody(req) as { profile?: string; name?: string };
+        const body = await this.readBody(req) as { profile?: string; name?: string; wechatNotifyEnabled?: boolean };
         try {
           if (body.profile !== undefined) {
             this.butler.storage.writeMemberProfile(memberId, body.profile);
           }
-          if (body.name) {
-            this.butler.familyManager.updateMember(memberId, { name: body.name });
+          if (body.name || body.wechatNotifyEnabled !== undefined) {
+            const updates: { name?: string; wechatNotifyEnabled?: boolean } = {};
+            if (body.name) updates.name = body.name;
+            if (body.wechatNotifyEnabled !== undefined) updates.wechatNotifyEnabled = body.wechatNotifyEnabled;
+            this.butler.familyManager.updateMember(memberId, updates);
           }
           this.json(res, { ok: true });
         } catch (err) {
