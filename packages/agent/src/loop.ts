@@ -70,7 +70,19 @@ export class AgentLoop {
       for (const toolCall of assistantMessage.toolCalls) {
         yield { type: "tool_start", toolName: toolCall.function.name, params: toolCall.function.arguments };
 
-        const result = await this.toolRunner.execute(toolCall);
+        let result: { content: string; isError?: boolean };
+        
+        try {
+          result = await this.toolRunner.execute(toolCall);
+        } catch (err) {
+          // 双重保险：即使tool runner本身崩溃，也要处理
+          console.error(`Critical error in tool execution for ${toolCall.function.name}:`, err);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          result = {
+            content: `工具执行发生严重错误: ${errorMessage}。请稍后重试或联系管理员。`,
+            isError: true,
+          };
+        }
 
         yield {
           type: "tool_end",

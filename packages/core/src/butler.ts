@@ -482,7 +482,33 @@ export class ButlerService {
     } catch (err) {
       // Stop typing on error
       await this.stopTyping(member.id);
-      throw err;
+      
+      // 记录错误但不让整个服务崩溃
+      console.error(`Agent session error for member ${member.id}:`, err);
+      
+      // 给用户一个友好的错误消息
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      let userFriendlyMessage = "抱歉，处理您的消息时出现了问题。";
+      
+      // 针对特定错误类型提供更有用的信息
+      if (errorMessage.includes('LLM_ERROR')) {
+        userFriendlyMessage += "大模型服务暂时不可用，请稍后重试。";
+      } else if (errorMessage.includes('AbortError') || errorMessage.includes('timeout')) {
+        userFriendlyMessage += "请求超时，请稍后重试。";
+      } else if (errorMessage.includes('tool_calls')) {
+        userFriendlyMessage += "工具调用出现问题，但您可以继续其他对话。";
+      } else {
+        userFriendlyMessage += "请稍后重试或联系管理员。";
+      }
+      
+      try {
+        await this.gateway.sendToMember(member.id, userFriendlyMessage);
+      } catch (sendErr) {
+        console.error(`Failed to send error message to member ${member.id}:`, sendErr);
+      }
+      
+      // 不再重新抛出错误，让服务继续运行
+      return;
     } finally {
       unsubscribe();
     }

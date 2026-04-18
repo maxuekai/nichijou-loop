@@ -145,6 +145,11 @@ export default definePlugin({
       default: 30,
       required: false,
     },
+    enabledRSSSources: {
+      type: "string",
+      description: "启用的RSS新闻源列表，用逗号分隔（留空则启用全部）。可选：IT之家、36氪、虎嗅、少数派、财经网、新浪财经、新浪新闻、网易新闻",
+      required: false,
+    },
   },
 
   tools: [

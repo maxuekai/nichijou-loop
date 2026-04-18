@@ -1,20 +1,19 @@
 import type { NewsAPIResponse, NewsArticle, NewsFetchParams, CacheEntry } from "./types.js";
 
-// 中文RSS新闻源配置
+// 中文RSS新闻源配置（仅保留经测试可用的源）
 const chineseRSSFeeds = {
   technology: [
     { name: "IT之家", url: "https://www.ithome.com/rss/" },
     { name: "36氪", url: "https://36kr.com/feed" },
-    { name: "虎嗅", url: "https://www.huxiu.com/rss/0.xml" },
     { name: "少数派", url: "https://sspai.com/feed" }
   ],
   business: [
-    { name: "财经网", url: "http://www.caijing.com.cn/rss/news.xml" },
-    { name: "新浪财经", url: "https://finance.sina.com.cn/roll/finance_roll.shtml" }
+    // 经测试，暂时没有稳定的商业类RSS源
+    // 财经网和新浪财经返回404错误
   ],
   general: [
-    { name: "新浪新闻", url: "https://news.sina.com.cn/roll/news_roll.shtml" },
     { name: "网易新闻", url: "http://news.163.com/special/00011K6L/rss_newstop.xml" }
+    // 新浪新闻返回404错误，已移除
   ]
 };
 
@@ -40,30 +39,67 @@ function parseXMLField(xml: string, tag: string): string {
     .trim();
 }
 
+// RSS 源获取结果类型
+type RSSFeedResult = {
+  success: true;
+  articles: NewsArticle[];
+  feedName: string;
+} | {
+  success: false;
+  error: string;
+  feedName: string;
+};
+
 // 从RSS获取中文新闻
-async function fetchChineseNewsFromRSS(params: NewsFetchParams): Promise<NewsAPIResponse> {
+async function fetchChineseNewsFromRSS(params: NewsFetchParams, config: Record<string, unknown> = {}): Promise<NewsAPIResponse> {
   const category = params.category || "technology";
   const feeds = chineseRSSFeeds[category as keyof typeof chineseRSSFeeds] || chineseRSSFeeds.technology;
   
+  // 根据配置过滤RSS源
+  const enabledFeeds = feeds.filter(feed => {
+    const enabledSourcesStr = config.enabledRSSSources as string | undefined;
+    if (!enabledSourcesStr || enabledSourcesStr.trim() === '') {
+      return true; // 如果没有配置，默认启用所有源
+    }
+    const enabledSources = enabledSourcesStr.split(',').map(s => s.trim());
+    return enabledSources.includes(feed.name);
+  });
+  
+  if (enabledFeeds.length === 0) {
+    console.warn(`分类 ${category} 没有启用的RSS源`);
+    return {
+      status: 'ok',
+      totalResults: 0,
+      articles: []
+    };
+  }
+  
   const allArticles: NewsArticle[] = [];
   
-  // 尝试获取多个RSS源的内容
-  for (const feed of feeds.slice(0, 2)) { // 只取前2个源避免太慢
+  // 尝试获取多个RSS源的内容，增加并发和更好的错误处理
+  const fetchPromises = enabledFeeds.slice(0, 3).map(async (feed): Promise<RSSFeedResult> => {
     try {
-      // 创建兼容的AbortController和超时处理
+      // 创建兼容的AbortController和超时处理，增加超时时间
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => {
+        console.warn(`RSS源 ${feed.name} 请求超时，正在取消...`);
+        controller.abort();
+      }, 15000); // 增加到15秒
       
       const response = await fetch(feed.url, {
         signal: controller.signal,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/rss+xml, application/xml, text/xml',
+          'Cache-Control': 'no-cache',
         },
       });
       
       clearTimeout(timeoutId);
       
-      if (!response.ok) continue;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
       
       const xmlText = await response.text();
       
@@ -71,6 +107,7 @@ async function fetchChineseNewsFromRSS(params: NewsFetchParams): Promise<NewsAPI
       const itemRegex = /<item[\s\S]*?<\/item>/gi;
       const items = xmlText.match(itemRegex) || [];
       
+      const feedArticles: NewsArticle[] = [];
       for (const item of items.slice(0, 5)) { // 每个源取5条
         const title = parseXMLField(item, 'title');
         const description = parseXMLField(item, 'description');
@@ -78,7 +115,7 @@ async function fetchChineseNewsFromRSS(params: NewsFetchParams): Promise<NewsAPI
         const pubDate = parseXMLField(item, 'pubDate');
         
         if (title && link) {
-          allArticles.push({
+          feedArticles.push({
             source: { id: null, name: feed.name },
             author: null,
             title,
@@ -90,10 +127,41 @@ async function fetchChineseNewsFromRSS(params: NewsFetchParams): Promise<NewsAPI
           });
         }
       }
+      
+      return { success: true, articles: feedArticles, feedName: feed.name };
     } catch (error) {
-      console.warn(`获取RSS源 ${feed.name} 失败:`, error);
-      continue;
+      console.warn(`获取RSS源 ${feed.name} 失败:`, error instanceof Error ? error.message : String(error));
+      return { success: false, error: error instanceof Error ? error.message : String(error), feedName: feed.name };
     }
+  });
+  
+  // 等待所有请求完成，不管成功失败
+  const results = await Promise.allSettled(fetchPromises);
+  
+  // 收集成功的结果
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value.success && result.value.articles) {
+      allArticles.push(...result.value.articles);
+    }
+  }
+  
+  // 如果没有获取到任何文章，但有一些源失败了，记录详细错误
+  if (allArticles.length === 0) {
+    const errors = results
+      .filter((r): r is PromiseFulfilledResult<RSSFeedResult> => 
+        r.status === 'fulfilled' && !r.value.success)
+      .map(r => {
+        const failedResult = r.value as Extract<RSSFeedResult, { success: false }>;
+        return `${failedResult.feedName}: ${failedResult.error}`;
+      })
+      .join('; ');
+    
+    const rejections = results
+      .filter(r => r.status === 'rejected')
+      .map(r => r.reason?.message || String(r.reason))
+      .join('; ');
+      
+    console.error('所有RSS源都失败了:', { errors, rejections });
   }
   
   // 按发布时间排序
@@ -177,9 +245,25 @@ export async function fetchNews(
     }
   }
 
-  // 使用免费的中文RSS源获取新闻
+  // 使用免费的中文RSS源获取新闻，增加超时和错误处理
+  let newsData: NewsAPIResponse | null = null;
+  let errorMessage = '';
+  
   try {
-    const newsData = await fetchChineseNewsFromRSS(params);
+    // 设置整体超时，防止长时间卡死
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('整体获取超时')), 30000); // 30秒总超时
+    });
+    
+    newsData = await Promise.race([
+      fetchChineseNewsFromRSS(params, config),
+      timeoutPromise
+    ]);
+    
+    // 即使获取成功，也检查是否有文章
+    if (!newsData || newsData.articles.length === 0) {
+      throw new Error('未获取到任何新闻文章');
+    }
     
     // 缓存结果
     if (config.enableCache !== false) {
@@ -193,23 +277,29 @@ export async function fetchNews(
     // 格式化返回给 AI
     const formattedNews = formatNewsForAI(newsData.articles, params.limit || 5);
     return { content: `${formattedNews}\n\n📡 数据来源：免费RSS源` };
-  } catch (error) {
-    console.warn('RSS源获取失败:', error);
     
-    // 尝试返回缓存数据作为降级
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn('RSS源获取失败:', errorMessage);
+  }
+
+  // 尝试返回缓存数据作为降级
+  if (config.enableCache !== false) {
     const cached = newsCache.get(cacheKey);
-    if (cached && config.enableCache !== false) {
+    if (cached) {
       const formattedNews = formatNewsForAI(cached.data.articles, params.limit || 5);
+      const cacheAge = Math.floor((Date.now() - cached.timestamp) / 60000);
       return { 
-        content: `⚠️ 获取最新新闻失败，显示缓存内容：\n\n${formattedNews}` 
+        content: `⚠️ 获取最新新闻失败（${errorMessage}），显示缓存内容：\n\n${formattedNews}\n\n📝 缓存时间：${cacheAge}分钟前` 
       };
     }
-
-    return {
-      content: `新闻获取失败: RSS源无法访问。请检查网络连接或稍后重试。`,
-      isError: true,
-    };
   }
+
+  // 最后的降级：返回友好的错误信息，但不标记为error（避免LLM处理异常）
+  return {
+    content: `📢 暂时无法获取最新新闻\n\n原因：${errorMessage}\n\n建议：\n• 请稍后重试\n• 检查网络连接\n• 如果问题持续，请联系管理员\n\n🤖 我仍然可以为您提供其他服务，比如天气查询、GitHub项目推荐等。`,
+    isError: false, // 改为false，避免LLM异常
+  };
 }
 
 // 根据 newsId 查找新闻详情
@@ -246,4 +336,61 @@ export function cleanExpiredCache(): void {
       newsCache.delete(key);
     }
   }
+}
+
+// 测试RSS源可用性的工具函数
+export async function testRSSSourceAvailability(): Promise<{ [category: string]: { [source: string]: { status: 'success' | 'failed', error?: string, articleCount?: number, responseTime?: number } } }> {
+  const results: any = {};
+  
+  for (const [category, feeds] of Object.entries(chineseRSSFeeds)) {
+    results[category] = {};
+    
+    for (const feed of feeds) {
+      const startTime = Date.now();
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+        
+        const response = await fetch(feed.url, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; RSSChecker/1.0)',
+            'Accept': 'application/rss+xml, application/xml, text/xml',
+          },
+        });
+        
+        clearTimeout(timeoutId);
+        const responseTime = Date.now() - startTime;
+        
+        if (!response.ok) {
+          results[category][feed.name] = {
+            status: 'failed',
+            error: `HTTP ${response.status}: ${response.statusText}`,
+            responseTime
+          };
+          continue;
+        }
+        
+        const xmlText = await response.text();
+        const itemRegex = /<item[\s\S]*?<\/item>/gi;
+        const items = xmlText.match(itemRegex) || [];
+        
+        results[category][feed.name] = {
+          status: 'success',
+          articleCount: items.length,
+          responseTime
+        };
+        
+      } catch (error) {
+        const responseTime = Date.now() - startTime;
+        results[category][feed.name] = {
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+          responseTime
+        };
+      }
+    }
+  }
+  
+  return results;
 }

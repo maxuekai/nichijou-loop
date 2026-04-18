@@ -58,10 +58,16 @@ export class Gateway {
   }
 
   async handleInbound(msg: InboundMessage): Promise<void> {
-    const member = this.familyManager.getMember(msg.memberId);
-    if (!member) return;
-    if (this.messageHandler) {
-      await this.messageHandler(member, msg);
+    try {
+      const member = this.familyManager.getMember(msg.memberId);
+      if (!member) return;
+      if (this.messageHandler) {
+        await this.messageHandler(member, msg);
+      }
+    } catch (err) {
+      // 记录错误但不让整个gateway崩溃
+      console.error(`Gateway error handling message from ${msg.memberId}:`, err);
+      // 这里不再重新抛出错误，保证服务的稳定性
     }
   }
 

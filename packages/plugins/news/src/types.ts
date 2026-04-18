@@ -50,6 +50,7 @@ export interface NewsPluginConfig {
   enableCache?: boolean;
   newsCacheMinutes?: number;
   githubCacheMinutes?: number;
+  enabledRSSSources?: string[]; // 启用的RSS源名称列表
 }
 
 // 工具参数类型
