@@ -101,7 +101,8 @@ const MODEL_PRESETS = [
 ];
 
 function maskApiKey(key: string): string {
-  if (!key || key === "***") return "未配置";
+  if (!key) return "未配置";
+  if (key === "***") return "已配置";
   if (key.length <= 8) return key;
   return key.slice(0, 4) + "****" + key.slice(-4);
 }
@@ -239,7 +240,13 @@ export function ModelsPage() {
     setSaving(true);
     setActionError(null);
     try {
-      await api.updateModel(editingModelId, editingData);
+      // 处理 API key：如果是 "***" 或为空，则不更新此字段
+      const updateData = { ...editingData };
+      if (!updateData.apiKey || updateData.apiKey === "***") {
+        delete updateData.apiKey;
+      }
+      
+      await api.updateModel(editingModelId, updateData);
       await loadModels();
       setEditingModelId(null);
       setEditingData({});
@@ -699,8 +706,9 @@ export function ModelsPage() {
                         <label className="block text-sm font-medium text-stone-700 mb-2">API密钥</label>
                         <input
                           type="password"
-                          value={editingData.apiKey || ""}
+                          value={editingData.apiKey === "***" ? "" : (editingData.apiKey || "")}
                           onChange={(e) => setEditingData(prev => ({ ...prev, apiKey: e.target.value }))}
+                          placeholder="留空保持原有密钥不变"
                           className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                         />
                       </div>

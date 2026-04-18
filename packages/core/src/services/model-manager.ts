@@ -59,6 +59,7 @@ export class ModelManager {
       // 将其他模型的 isDefault 设为 false
       cfg.models.models.forEach(m => m.isDefault = false);
       newModel.isDefault = true;
+      newModel.lastUsedAt = new Date().toISOString(); // 设置使用时间
       cfg.models.activeModelId = id;
     }
 
