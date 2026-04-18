@@ -98,6 +98,7 @@ export function MembersPage() {
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
   const [deletingRoutine, setDeletingRoutine] = useState<string | null>(null);
   const [editingMemberInfo, setEditingMemberInfo] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"basic" | "notifications" | "advanced">("basic");
   const [memberNameDraft, setMemberNameDraft] = useState("");
   const [memberAvatarFile, setMemberAvatarFile] = useState<File | null>(null);
   const [memberAvatarPreview, setMemberAvatarPreview] = useState<string | null>(null);
@@ -197,6 +198,7 @@ export function MembersPage() {
     setMemberNameDraft(detail.member.name);
     setMemberAvatarFile(null);
     setMemberAvatarPreview(detail.member.avatar ? api.avatarUrl(detail.member.avatar) : null);
+    setSettingsTab("basic");
     setEditingMemberInfo(true);
   }
 
@@ -513,53 +515,15 @@ export function MembersPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {/* WeChat activity reminder toggle */}
-                {detail.member.channelBindings.wechat && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-stone-50">
-                    <span className="text-xs font-medium text-stone-600">活跃提醒</span>
-                    <button
-                      onClick={async () => {
-                        if (!selectedId) return;
-                        try {
-                          const newValue = !detail.member.wechatNotifyEnabled;
-                          await api.updateMember(selectedId, { wechatNotifyEnabled: newValue });
-                          // Refresh member details
-                          const updated = await api.getMemberDetail(selectedId);
-                          setDetail(updated);
-                        } catch (err) {
-                          setPageError(err instanceof Error ? err.message : "更新活跃提醒设置失败");
-                        }
-                      }}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors focus:outline-none ${
-                        detail.member.wechatNotifyEnabled ? "bg-green-500" : "bg-stone-300"
-                      } cursor-pointer`}
-                    >
-                      <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
-                        detail.member.wechatNotifyEnabled ? "translate-x-3.5" : "translate-x-0.5"
-                      }`} />
-                    </button>
-                  </div>
-                )}
-                <button
-                  onClick={() => {
-                    if (!selectedId) return;
-                    void api.clearMemberContext(selectedId).then(() => {
-                      setPageError(null);
-                      setContextCleared(true);
-                      setTimeout(() => setContextCleared(false), 2000);
-                    }).catch((err) => {
-                      setPageError(err instanceof Error ? err.message : "清除上下文失败");
-                    });
-                  }}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 transition-colors"
-                >
-                  {contextCleared ? "已清除" : "清除上下文"}
-                </button>
                 <button
                   onClick={openMemberEditDialog}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-stone-700 bg-stone-100 hover:bg-stone-200 transition-colors"
                 >
-                  编辑
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  设置
                 </button>
               </div>
             </div>
@@ -1116,61 +1080,217 @@ export function MembersPage() {
         )}
       </div>
 
-      {/* Edit member info dialog */}
+      {/* Member settings dialog */}
       {editingMemberInfo && detail && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingMemberInfo(false)}>
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-stone-800 mb-4">编辑成员信息</h3>
-            <div className="space-y-4">
-              <div className="flex justify-center">
-                <label className="relative cursor-pointer group">
-                  {memberAvatarPreview ? (
-                    <img src={memberAvatarPreview} alt={memberNameDraft} className="w-20 h-20 rounded-full object-cover" />
-                  ) : (
-                    <div className="w-20 h-20 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 text-2xl font-medium">
-                      {memberNameDraft.charAt(0) || detail.member.name.charAt(0)}
-                    </div>
-                  )}
-                  <div className="absolute inset-0 rounded-full bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs">
-                    更换头像
-                  </div>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      setMemberAvatarFile(file);
-                      setMemberAvatarPreview(URL.createObjectURL(file));
-                    }}
-                  />
-                </label>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">成员名称</label>
-                <input
-                  type="text"
-                  value={memberNameDraft}
-                  onChange={(e) => setMemberNameDraft(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                />
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6 border-b border-stone-200">
+              <h3 className="text-lg font-semibold text-stone-800 mb-4">成员设置</h3>
+              {/* Tab navigation */}
+              <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
+                {([
+                  ["basic", "基本信息"],
+                  ["notifications", "通知设置"],
+                  ["advanced", "高级设置"],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSettingsTab(key)}
+                    className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                      settingsTab === key 
+                        ? "bg-white text-stone-800 shadow-sm" 
+                        : "text-stone-500 hover:text-stone-700"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
-            <div className="flex justify-end gap-3 mt-6">
+
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
+              {/* Basic Info Tab */}
+              {settingsTab === "basic" && (
+                <div className="space-y-4">
+                  <div className="flex justify-center">
+                    <label className="relative cursor-pointer group">
+                      {memberAvatarPreview ? (
+                        <img src={memberAvatarPreview} alt={memberNameDraft} className="w-20 h-20 rounded-full object-cover" />
+                      ) : (
+                        <div className="w-20 h-20 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 text-2xl font-medium">
+                          {memberNameDraft.charAt(0) || detail.member.name.charAt(0)}
+                        </div>
+                      )}
+                      <div className="absolute inset-0 rounded-full bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs">
+                        更换头像
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          setMemberAvatarFile(file);
+                          setMemberAvatarPreview(URL.createObjectURL(file));
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-500 mb-1">成员名称</label>
+                    <input
+                      type="text"
+                      value={memberNameDraft}
+                      onChange={(e) => setMemberNameDraft(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-500 mb-1">成员角色</label>
+                    <div className="px-3 py-2 rounded-lg bg-stone-50 text-sm text-stone-600">
+                      {detail.member.role === "admin" ? "管理员" : "成员"}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-500 mb-1">成员ID</label>
+                    <div className="px-3 py-2 rounded-lg bg-stone-50 text-sm text-stone-600 font-mono">
+                      {detail.member.id}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Notifications Tab */}
+              {settingsTab === "notifications" && (
+                <div className="space-y-6">
+                  <div>
+                    <h4 className="text-sm font-medium text-stone-800 mb-3">微信通知</h4>
+                    
+                    {detail.member.channelBindings.wechat ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between p-4 rounded-lg border border-stone-200 bg-stone-50">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h5 className="text-sm font-medium text-stone-800">活跃提醒</h5>
+                              <button
+                                onClick={async () => {
+                                  if (!selectedId) return;
+                                  try {
+                                    const newValue = !detail.member.wechatNotifyEnabled;
+                                    await api.updateMember(selectedId, { wechatNotifyEnabled: newValue });
+                                    await refreshMemberDetail(selectedId);
+                                  } catch (err) {
+                                    setPageError(err instanceof Error ? err.message : "更新活跃提醒设置失败");
+                                  }
+                                }}
+                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                                  detail.member.wechatNotifyEnabled ? "bg-green-500" : "bg-stone-300"
+                                } cursor-pointer`}
+                              >
+                                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                                  detail.member.wechatNotifyEnabled ? "translate-x-4" : "translate-x-0.5"
+                                }`} />
+                              </button>
+                            </div>
+                            <p className="text-xs text-stone-500 leading-relaxed">
+                              由于微信限制，用户超过24小时未发消息后无法接收推送。开启此功能后，系统会在用户23小时未发消息时主动发送提醒，确保通讯正常。
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+                          <div className="flex items-start gap-2">
+                            <svg className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div className="text-xs text-blue-700">
+                              <p className="font-medium mb-1">微信连接状态：已绑定</p>
+                              <p>微信用户可以正常接收系统通知和提醒消息</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-4 rounded-lg border border-amber-200 bg-amber-50">
+                        <div className="flex items-start gap-2">
+                          <svg className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                          </svg>
+                          <div className="text-xs text-amber-700">
+                            <p className="font-medium mb-1">未绑定微信</p>
+                            <p>该成员尚未绑定微信账号，无法接收微信通知</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Advanced Tab */}
+              {settingsTab === "advanced" && (
+                <div className="space-y-6">
+                  <div>
+                    <h4 className="text-sm font-medium text-stone-800 mb-3">对话管理</h4>
+                    <div className="space-y-4">
+                      <div className="p-4 rounded-lg border border-stone-200">
+                        <div className="flex items-center justify-between mb-2">
+                          <h5 className="text-sm font-medium text-stone-800">清除上下文</h5>
+                          <button
+                            onClick={() => {
+                              if (!selectedId) return;
+                              void api.clearMemberContext(selectedId).then(() => {
+                                setPageError(null);
+                                setContextCleared(true);
+                                setTimeout(() => setContextCleared(false), 2000);
+                              }).catch((err) => {
+                                setPageError(err instanceof Error ? err.message : "清除上下文失败");
+                              });
+                            }}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                          >
+                            {contextCleared ? "已清除" : "清除"}
+                          </button>
+                        </div>
+                        <p className="text-xs text-stone-500">
+                          清除该成员的对话历史和上下文缓存。这将重置AI的记忆，下次对话时将是全新的开始。
+                        </p>
+                      </div>
+                      
+                      <div className="p-3 rounded-lg bg-yellow-50 border border-yellow-200">
+                        <div className="flex items-start gap-2">
+                          <svg className="w-4 h-4 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                          </svg>
+                          <div className="text-xs text-yellow-700">
+                            <p className="font-medium mb-1">注意</p>
+                            <p>清除上下文后，AI将不再记住之前的对话内容，但成员档案和习惯数据不会受影响。</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 border-t border-stone-200 bg-stone-50 flex justify-end gap-3">
               <button
                 onClick={() => setEditingMemberInfo(false)}
-                className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors"
+                className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-200 transition-colors"
               >
-                取消
+                关闭
               </button>
-              <button
-                onClick={saveMemberInfo}
-                disabled={!memberNameDraft.trim()}
-                className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
-              >
-                保存
-              </button>
+              {settingsTab === "basic" && (
+                <button
+                  onClick={saveMemberInfo}
+                  disabled={!memberNameDraft.trim()}
+                  className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                >
+                  保存基本信息
+                </button>
+              )}
             </div>
           </div>
         </div>
