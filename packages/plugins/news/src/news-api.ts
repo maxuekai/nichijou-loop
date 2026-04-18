@@ -50,12 +50,18 @@ async function fetchChineseNewsFromRSS(params: NewsFetchParams): Promise<NewsAPI
   // 尝试获取多个RSS源的内容
   for (const feed of feeds.slice(0, 2)) { // 只取前2个源避免太慢
     try {
+      // 创建兼容的AbortController和超时处理
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      
       const response = await fetch(feed.url, {
-        signal: AbortSignal.timeout(8000),
+        signal: controller.signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         },
       });
+      
+      clearTimeout(timeoutId);
       
       if (!response.ok) continue;
       
@@ -132,8 +138,11 @@ function formatNewsForAI(articles: NewsArticle[], limit: number): string {
     const source = article.source.name;
     const description = article.description || "暂无描述";
     
-    // 生成新闻ID（使用索引和URL的hash）
-    const newsId = `news_${index + 1}_${Buffer.from(article.url).toString('base64').slice(0, 8)}`;
+    // 生成新闻ID（使用索引和URL的简单hash）
+    const simpleHash = article.url.split('').reduce((acc, char) => {
+      return ((acc << 5) - acc + char.charCodeAt(0)) & 0xffffffff;
+    }, 0).toString(16).slice(0, 8);
+    const newsId = `news_${index + 1}_${simpleHash}`;
     
     return `${index + 1}. 【${source}】${article.title}
    发布时间: ${time}
@@ -216,8 +225,10 @@ export function findNewsByNewsId(newsId: string): NewsArticle | null {
   for (const [, entry] of newsCache.entries()) {
     if (targetIndex >= 0 && targetIndex < entry.data.articles.length) {
       const article = entry.data.articles[targetIndex];
-      // 验证 hash 是否匹配
-      const expectedHash = Buffer.from(article.url).toString('base64').slice(0, 8);
+      // 验证 hash 是否匹配（使用同样的简单hash算法）
+      const expectedHash = article.url.split('').reduce((acc, char) => {
+        return ((acc << 5) - acc + char.charCodeAt(0)) & 0xffffffff;
+      }, 0).toString(16).slice(0, 8);
       if (match[2] === expectedHash) {
         return article;
       }
