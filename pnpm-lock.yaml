@@ -82,6 +82,15 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
+  packages/plugins/news:
+    dependencies:
+      '@nichijou/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../plugin-sdk
+      '@nichijou/shared':
+        specifier: workspace:*
+        version: link:../../shared
+
   packages/plugins/weather:
     dependencies:
       '@nichijou/plugin-sdk':
