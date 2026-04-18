@@ -92,10 +92,6 @@ export class Gateway {
     await channel.send(memberId, text);
   }
 
-  getChannel(id: string): Channel | undefined {
-    return this.channels.get(id);
-  }
-
   getAllChannelStatuses(): Record<string, ReturnType<Channel["getStatus"]>> {
     const statuses: Record<string, ReturnType<Channel["getStatus"]>> = {};
     for (const [id, channel] of this.channels) {

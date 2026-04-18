@@ -418,7 +418,6 @@ export class WeChatChannel implements Channel {
       // Get or cache typing ticket (with expiration check)
       let ticket = this.typingTickets.get(memberId);
       const ticketTimestamp = this.ticketTimestamps.get(memberId);
-      const now = Date.now();
       
       // Check if ticket is expired (30 minutes)
       if (!ticket || !ticketTimestamp || (now - ticketTimestamp) > 30 * 60 * 1000) {
@@ -428,8 +427,8 @@ export class WeChatChannel implements Channel {
         this.ticketTimestamps.set(memberId, now);
       }
 
-      // Start typing (status = 1)
-      await client.sendTyping(toUserId, ticket, 1);
+      // Start typing (status = "typing")
+      await client.sendTyping(toUserId, ticket, "typing");
       this.activeTyping.add(memberId);
 
       // Set timeout to auto-stop typing after 30 seconds
@@ -487,8 +486,8 @@ export class WeChatChannel implements Channel {
         return;
       }
 
-      // Stop typing (status = 0)
-      await client.sendTyping(toUserId, ticket, 0);
+      // Stop typing (status = "cancel")
+      await client.sendTyping(toUserId, ticket, "cancel");
       this.activeTyping.delete(memberId);
       
       // Clear timeout
