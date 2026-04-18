@@ -334,6 +334,64 @@ export class ButlerService {
   private static readonly FINISH_KEYWORDS = ["好了", "完成", "没有了", "差不多了", "就这些", "结束", "可以了", "完成了", "no more", "done"];
 
   /**
+   * Start typing indicator for a member if the channel supports it.
+   */
+  private async startTyping(memberId: string): Promise<void> {
+    try {
+      // Check if typing indicator is enabled in config
+      const config = this.config.get();
+      if (!config.wechat?.typingIndicator?.enabled) {
+        return;
+      }
+
+      const member = this.familyManager.getMember(memberId);
+      if (!member) return;
+
+      const channelId = member.primaryChannel && this.gateway.hasChannel(member.primaryChannel)
+        ? member.primaryChannel
+        : (member.channelBindings.wechat ? "wechat" : "");
+      
+      if (!channelId) return;
+
+      const channel = this.gateway.getChannel(channelId);
+      if (channel?.startTyping) {
+        await channel.startTyping(memberId);
+      }
+    } catch (err) {
+      console.error(`[Butler] startTyping 失败 (${memberId}):`, err);
+    }
+  }
+
+  /**
+   * Stop typing indicator for a member if the channel supports it.
+   */
+  private async stopTyping(memberId: string): Promise<void> {
+    try {
+      // Check if typing indicator is enabled in config
+      const config = this.config.get();
+      if (!config.wechat?.typingIndicator?.enabled) {
+        return;
+      }
+
+      const member = this.familyManager.getMember(memberId);
+      if (!member) return;
+
+      const channelId = member.primaryChannel && this.gateway.hasChannel(member.primaryChannel)
+        ? member.primaryChannel
+        : (member.channelBindings.wechat ? "wechat" : "");
+      
+      if (!channelId) return;
+
+      const channel = this.gateway.getChannel(channelId);
+      if (channel?.stopTyping) {
+        await channel.stopTyping(memberId);
+      }
+    } catch (err) {
+      console.error(`[Butler] stopTyping 失败 (${memberId}):`, err);
+    }
+  }
+
+  /**
    * Handle an inbound WeChat/channel message.
    * If the member has an active interview, route to the interview flow.
    * Otherwise, normal agent session.
@@ -352,6 +410,9 @@ export class ButlerService {
       return;
     }
 
+    // Start typing indicator
+    await this.startTyping(member.id);
+
     const session = this.getOrCreateSession(member.id);
     const events: Array<{ type: string; data: unknown }> = [];
     let lastTurnText = "";
@@ -369,6 +430,10 @@ export class ButlerService {
 
     try {
       await session.prompt(msg.text);
+    } catch (err) {
+      // Stop typing on error
+      await this.stopTyping(member.id);
+      throw err;
     } finally {
       unsubscribe();
     }
@@ -379,6 +444,8 @@ export class ButlerService {
     this.db.saveChat(member.id, "user", msg.text);
     this.db.saveChat(member.id, "assistant", reply);
 
+    // Stop typing before sending reply
+    await this.stopTyping(member.id);
     await this.gateway.sendToMember(member.id, reply);
   }
 
@@ -427,10 +494,15 @@ export class ButlerService {
       return;
     }
 
+    // Start typing indicator for interview responses
+    await this.startTyping(member.id);
+
     try {
       const reply = await this.interviewChat(member.id, trimmed);
+      await this.stopTyping(member.id);
       await this.gateway.sendToMember(member.id, reply);
     } catch (err) {
+      await this.stopTyping(member.id);
       const errMsg = err instanceof Error ? err.message : String(err);
       await this.gateway.sendToMember(member.id, `出了点问题：${errMsg}`);
     }

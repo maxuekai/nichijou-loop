@@ -8,5 +8,7 @@ export interface Channel {
   stop(): Promise<void>;
   send(memberId: string, text: string): Promise<void>;
   sendMedia?(memberId: string, filePath: string, caption?: string): Promise<void>;
+  startTyping?(memberId: string): Promise<void>;
+  stopTyping?(memberId: string): Promise<void>;
   getStatus(): ChannelStatus;
 }

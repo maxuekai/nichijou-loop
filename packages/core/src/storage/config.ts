@@ -7,6 +7,13 @@ export interface LLMConfig {
   model: string;
 }
 
+export interface WeChatConfig {
+  typingIndicator?: {
+    enabled: boolean;
+    timeoutSeconds: number;
+  };
+}
+
 export interface NichijouConfig {
   llm: LLMConfig;
   port: number;
@@ -14,6 +21,7 @@ export interface NichijouConfig {
   setupCompleted: boolean;
   butlerName?: string;
   plugins?: string[];
+  wechat?: WeChatConfig;
 }
 
 const DEFAULT_CONFIG: NichijouConfig = {
@@ -26,6 +34,12 @@ const DEFAULT_CONFIG: NichijouConfig = {
   timezone: "Asia/Shanghai",
   setupCompleted: false,
   butlerName: "Nichijou",
+  wechat: {
+    typingIndicator: {
+      enabled: true,
+      timeoutSeconds: 30,
+    },
+  },
 };
 
 export class ConfigManager {

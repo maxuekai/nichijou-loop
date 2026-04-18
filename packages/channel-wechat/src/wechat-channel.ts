@@ -24,6 +24,16 @@ export class WeChatChannel implements Channel {
   private userIdIndex = new Map<string, string>();
   /** memberId → connectionId lookup */
   private memberIdIndex = new Map<string, string>();
+  /** Cache typing tickets: memberId → ticket */
+  private typingTickets = new Map<string, string>();
+  /** Cache ticket creation timestamps for expiration: memberId → timestamp */
+  private ticketTimestamps = new Map<string, number>();
+  /** Track active typing states to avoid duplicates */
+  private activeTyping = new Set<string>();
+  /** Timeout handles for auto-stopping typing indicators */
+  private typingTimeouts = new Map<string, NodeJS.Timeout>();
+  /** Debounce map to prevent rapid successive calls: memberId → timestamp of last call */
+  private lastTypingCall = new Map<string, number>();
 
   private gateway: Gateway | null = null;
   private storage: StorageManager;
@@ -33,6 +43,8 @@ export class WeChatChannel implements Channel {
     connectionId: string;
     qrUrl?: string;
   } | null = null;
+  /** Periodic cleanup interval */
+  private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(storage: StorageManager) {
     this.storage = storage;
@@ -54,6 +66,9 @@ export class WeChatChannel implements Channel {
     if (accounts.length > 0) {
       console.log(`[WeChat] 恢复了 ${this.connections.size}/${accounts.length} 个连接`);
     }
+
+    // Start periodic cleanup of expired tickets
+    this.startPeriodicCleanup();
   }
 
   async stop(): Promise<void> {
@@ -61,6 +76,13 @@ export class WeChatChannel implements Channel {
       this.pendingLogin.abort.abort();
       this.pendingLogin = null;
     }
+    
+    // Stop periodic cleanup
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+    
     for (const client of this.clients.values()) {
       client.stop();
     }
@@ -68,6 +90,8 @@ export class WeChatChannel implements Channel {
     this.connections.clear();
     this.userIdIndex.clear();
     this.memberIdIndex.clear();
+    // Clean up all typing states
+    this.cleanupTypingState();
   }
 
   /**
@@ -195,7 +219,11 @@ export class WeChatChannel implements Channel {
     }
 
     if (conn.wechatUserId) this.userIdIndex.delete(conn.wechatUserId);
-    if (conn.memberId) this.memberIdIndex.delete(conn.memberId);
+    if (conn.memberId) {
+      this.memberIdIndex.delete(conn.memberId);
+      // Clean up typing state for this member
+      this.cleanupTypingState(conn.memberId);
+    }
     this.connections.delete(connectionId);
 
     this.storage.deleteFile(`wechat/connections/${connectionId}`);
@@ -270,6 +298,10 @@ export class WeChatChannel implements Channel {
     client.on("sessionExpired", () => {
       console.warn(`[WeChat] [${connectionId}] 会话过期，需要重新扫码`);
       connection.status = "expired";
+      // Clean up typing state when session expires
+      if (connection.memberId) {
+        this.cleanupTypingState(connection.memberId);
+      }
     });
 
     const dir = `wechat/connections/${connectionId}`;
@@ -291,6 +323,10 @@ export class WeChatChannel implements Channel {
       console.error(`[WeChat] [${connectionId}] 长轮询启动失败:`, err);
       connection.status = "disconnected";
       connection.lastError = err instanceof Error ? err.message : String(err);
+      // Clean up typing state when connection fails
+      if (connection.memberId) {
+        this.cleanupTypingState(connection.memberId);
+      }
     });
 
     this.clients.set(connectionId, client);
@@ -333,6 +369,220 @@ export class WeChatChannel implements Channel {
     }
 
     await client.sendText(toUserId, text, contextToken);
+  }
+
+  async startTyping(memberId: string): Promise<void> {
+    try {
+      // Debounce: avoid rapid successive calls
+      const now = Date.now();
+      const lastCall = this.lastTypingCall.get(memberId);
+      if (lastCall && (now - lastCall) < 1000) { // 1 second debounce
+        return;
+      }
+      this.lastTypingCall.set(memberId, now);
+
+      // Avoid duplicate typing calls for the same member
+      if (this.activeTyping.has(memberId)) {
+        return;
+      }
+
+      const connId = this.memberIdIndex.get(memberId);
+      if (!connId) {
+        console.warn(`[WeChat] startTyping: 成员 ${memberId} 无微信连接`);
+        return;
+      }
+
+      const conn = this.connections.get(connId);
+      const client = this.clients.get(connId);
+      if (!client || !conn || conn.status !== "connected") {
+        console.warn(`[WeChat] startTyping: 连接 ${connId} 不可用或未连接`);
+        return;
+      }
+
+      const toUserId = conn.wechatUserId;
+      if (!toUserId) {
+        console.warn(`[WeChat] startTyping: 连接 ${connId} 缺少 wechatUserId`);
+        return;
+      }
+
+      let contextToken = client.getContextToken(toUserId);
+      if (!contextToken) {
+        const saved = this.storage.readText(`wechat/connections/${connId}/context_token.txt`);
+        if (saved) contextToken = saved.trim();
+      }
+      if (!contextToken) {
+        console.warn(`[WeChat] startTyping: 成员 ${memberId} 无可用会话令牌`);
+        return;
+      }
+
+      // Get or cache typing ticket (with expiration check)
+      let ticket = this.typingTickets.get(memberId);
+      const ticketTimestamp = this.ticketTimestamps.get(memberId);
+      const now = Date.now();
+      
+      // Check if ticket is expired (30 minutes)
+      if (!ticket || !ticketTimestamp || (now - ticketTimestamp) > 30 * 60 * 1000) {
+        console.log(`[WeChat] 获取新的 typing ticket (${memberId})`);
+        ticket = await client.getTypingTicket(toUserId, contextToken);
+        this.typingTickets.set(memberId, ticket);
+        this.ticketTimestamps.set(memberId, now);
+      }
+
+      // Start typing (status = 1)
+      await client.sendTyping(toUserId, ticket, 1);
+      this.activeTyping.add(memberId);
+
+      // Set timeout to auto-stop typing after 30 seconds
+      const existingTimeout = this.typingTimeouts.get(memberId);
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
+      
+      const timeout = setTimeout(async () => {
+        console.warn(`[WeChat] 正在输入状态超时，自动停止: ${memberId}`);
+        await this.stopTyping(memberId);
+      }, 30000); // 30 seconds
+      
+      this.typingTimeouts.set(memberId, timeout);
+
+      console.log(`[WeChat] 开始显示正在输入状态: ${memberId}`);
+    } catch (err) {
+      console.error(`[WeChat] startTyping 失败 (${memberId}):`, err);
+    }
+  }
+
+  async stopTyping(memberId: string): Promise<void> {
+    try {
+      // Only stop if we were actually typing
+      if (!this.activeTyping.has(memberId)) {
+        return;
+      }
+
+      const connId = this.memberIdIndex.get(memberId);
+      if (!connId) {
+        console.warn(`[WeChat] stopTyping: 成员 ${memberId} 无微信连接`);
+        this.activeTyping.delete(memberId);
+        return;
+      }
+
+      const conn = this.connections.get(connId);
+      const client = this.clients.get(connId);
+      if (!client || !conn) {
+        console.warn(`[WeChat] stopTyping: 连接 ${connId} 不可用`);
+        this.activeTyping.delete(memberId);
+        return;
+      }
+
+      const toUserId = conn.wechatUserId;
+      if (!toUserId) {
+        console.warn(`[WeChat] stopTyping: 连接 ${connId} 缺少 wechatUserId`);
+        this.activeTyping.delete(memberId);
+        return;
+      }
+
+      const ticket = this.typingTickets.get(memberId);
+      if (!ticket) {
+        console.warn(`[WeChat] stopTyping: 无缓存的 typing ticket (${memberId})`);
+        this.activeTyping.delete(memberId);
+        return;
+      }
+
+      // Stop typing (status = 0)
+      await client.sendTyping(toUserId, ticket, 0);
+      this.activeTyping.delete(memberId);
+      
+      // Clear timeout
+      const timeout = this.typingTimeouts.get(memberId);
+      if (timeout) {
+        clearTimeout(timeout);
+        this.typingTimeouts.delete(memberId);
+      }
+
+      console.log(`[WeChat] 停止显示正在输入状态: ${memberId}`);
+    } catch (err) {
+      console.error(`[WeChat] stopTyping 失败 (${memberId}):`, err);
+      // Always clean up the active state even if the API call failed
+      this.activeTyping.delete(memberId);
+      
+      // Clear timeout even on error
+      const timeout = this.typingTimeouts.get(memberId);
+      if (timeout) {
+        clearTimeout(timeout);
+        this.typingTimeouts.delete(memberId);
+      }
+    }
+  }
+
+  /**
+   * Clean up typing state for a specific member or all members.
+   */
+  private cleanupTypingState(memberId?: string): void {
+    if (memberId) {
+      // Clean up specific member
+      this.activeTyping.delete(memberId);
+      this.typingTickets.delete(memberId);
+      this.ticketTimestamps.delete(memberId);
+      this.lastTypingCall.delete(memberId);
+      
+      const timeout = this.typingTimeouts.get(memberId);
+      if (timeout) {
+        clearTimeout(timeout);
+        this.typingTimeouts.delete(memberId);
+      }
+    } else {
+      // Clean up all typing states
+      this.activeTyping.clear();
+      this.typingTickets.clear();
+      this.ticketTimestamps.clear();
+      this.lastTypingCall.clear();
+      
+      for (const timeout of this.typingTimeouts.values()) {
+        clearTimeout(timeout);
+      }
+      this.typingTimeouts.clear();
+    }
+  }
+
+  /**
+   * Start periodic cleanup of expired tickets and stale states.
+   */
+  private startPeriodicCleanup(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    
+    this.cleanupInterval = setInterval(() => {
+      this.performPeriodicCleanup();
+    }, 10 * 60 * 1000); // 10 minutes
+  }
+
+  /**
+   * Clean up expired tickets and stale typing states.
+   */
+  private performPeriodicCleanup(): void {
+    const now = Date.now();
+    const expiredMembers: string[] = [];
+
+    // Check for expired tickets (30 minutes)
+    for (const [memberId, timestamp] of this.ticketTimestamps.entries()) {
+      if ((now - timestamp) > 30 * 60 * 1000) {
+        expiredMembers.push(memberId);
+      }
+    }
+
+    // Clean up expired members
+    for (const memberId of expiredMembers) {
+      this.typingTickets.delete(memberId);
+      this.ticketTimestamps.delete(memberId);
+      console.log(`[WeChat] 清理过期的 typing ticket: ${memberId}`);
+    }
+
+    // Clean up stale typing calls (older than 5 minutes)
+    for (const [memberId, timestamp] of this.lastTypingCall.entries()) {
+      if ((now - timestamp) > 5 * 60 * 1000) {
+        this.lastTypingCall.delete(memberId);
+      }
+    }
   }
 
   getStatus(): ChannelStatus {

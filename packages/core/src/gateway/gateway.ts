@@ -37,6 +37,14 @@ export class Gateway {
     this.channels.set(channel.id, channel);
   }
 
+  getChannel(id: string): Channel | undefined {
+    return this.channels.get(id);
+  }
+
+  hasChannel(id: string): boolean {
+    return this.channels.has(id);
+  }
+
   async startAll(): Promise<void> {
     for (const channel of this.channels.values()) {
       await channel.start(this);
