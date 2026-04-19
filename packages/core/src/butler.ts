@@ -681,6 +681,9 @@ ${conversationText}
 
       // 清理90天前的对话日志
       this.db.cleanOldConversationLogs(90);
+      
+      // 清理超量的对话日志（保留最新10000条）
+      this.db.cleanExcessConversationLogs(10000);
 
       // 清理60天前的token使用记录
       this.db.cleanOldTokenUsage(60);

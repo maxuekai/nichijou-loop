@@ -511,7 +511,7 @@ export class Database {
   /**
    * 清理过期的对话日志
    */
-  cleanOldConversationLogs(daysToKeep: number = 90): void {
+  cleanOldConversationLogs(daysToKeep: number = 90): number {
     const result = this.db.prepare(`
       DELETE FROM conversation_logs 
       WHERE datetime(created_at) < datetime('now', '-${daysToKeep} days')
@@ -520,6 +520,49 @@ export class Database {
     if (result.changes > 0) {
       console.log(`[Database] 清理了 ${result.changes} 条过期对话日志`);
     }
+    
+    return result.changes;
+  }
+
+  /**
+   * 获取将要被删除的对话日志数量（用于预览）
+   */
+  getConversationLogsToDeleteCount(daysToKeep: number): number {
+    const result = this.db.prepare(`
+      SELECT COUNT(*) as count 
+      FROM conversation_logs 
+      WHERE datetime(created_at) < datetime('now', '-${daysToKeep} days')
+    `).get() as { count: number };
+    
+    return result.count;
+  }
+
+  /**
+   * 清理多余的对话日志，只保留最新的N条记录
+   */
+  cleanExcessConversationLogs(maxCount: number = 10000): number {
+    // 首先查询当前总数
+    const countResult = this.db.prepare(`SELECT COUNT(*) as count FROM conversation_logs`).get() as { count: number };
+    
+    if (countResult.count <= maxCount) {
+      return 0; // 无需清理
+    }
+    
+    // 删除超出数量限制的旧记录
+    const result = this.db.prepare(`
+      DELETE FROM conversation_logs 
+      WHERE id NOT IN (
+        SELECT id FROM conversation_logs 
+        ORDER BY created_at DESC 
+        LIMIT ?
+      )
+    `).run(maxCount);
+    
+    if (result.changes > 0) {
+      console.log(`[Database] 清理了 ${result.changes} 条超量对话日志（保留最新 ${maxCount} 条）`);
+    }
+    
+    return result.changes;
   }
 
   /**

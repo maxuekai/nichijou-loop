@@ -337,6 +337,36 @@ export class NichijouServer {
         return;
       }
 
+      if (path === "/api/logs/cleanup" && method === "POST") {
+        try {
+          const body = await this.readBody(req) as { daysToKeep?: number };
+          const daysToKeep = typeof body.daysToKeep === "number" ? body.daysToKeep : 90;
+          
+          // 验证参数合理性
+          if (daysToKeep < 0 || daysToKeep > 365) {
+            this.json(res, { error: "保留天数必须在0-365之间" }, 400);
+            return;
+          }
+          
+          // 先查询要删除的数量
+          const toDeleteCount = this.butler.db.getConversationLogsToDeleteCount(daysToKeep);
+          
+          // 执行清理
+          const actualDeletedCount = this.butler.db.cleanOldConversationLogs(daysToKeep);
+          
+          this.json(res, { 
+            success: true, 
+            deletedCount: actualDeletedCount,
+            estimatedCount: toDeleteCount,
+            daysToKeep 
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.json(res, { error: msg }, 500);
+        }
+        return;
+      }
+
       if (path.startsWith("/api/logs/") && method === "GET") {
         const memberId = path.split("/")[3]!;
         const logs = this.butler.db.getConversationLogs(memberId, 100);
