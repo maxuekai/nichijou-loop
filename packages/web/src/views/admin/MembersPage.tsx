@@ -129,6 +129,11 @@ export function MembersPage() {
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
 
+  // Routine preview
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewRoutine, setPreviewRoutine] = useState<Routine | null>(null);
+  const [originalDescription, setOriginalDescription] = useState("");
+
   // Override editing
   const [editingOverride, setEditingOverride] = useState<Override | null>(null);
   const [deletingOverride, setDeletingOverride] = useState<string | null>(null);
@@ -375,17 +380,19 @@ export function MembersPage() {
       const res = await api.parseRoutine(selectedId, desc.trim());
       if (res.ok && res.routine) {
         const r = res.routine as unknown as Routine;
-        setEditingRoutine((prev) => {
-          if (!prev) return r;
-          return {
-            ...r,
-            id: prev.id,
-            title: asText(r.title || prev.title),
-            weekdays: Array.isArray(r.weekdays) ? r.weekdays : prev.weekdays,
-            description: desc.trim(),
-          };
-        });
+        const processedRoutine = editingRoutine ? {
+          ...r,
+          id: editingRoutine.id,
+          title: asText(r.title || editingRoutine.title),
+          weekdays: Array.isArray(r.weekdays) ? r.weekdays : editingRoutine.weekdays,
+          description: desc.trim(),
+        } : r;
+
+        // Show preview instead of directly setting editingRoutine
+        setPreviewRoutine(processedRoutine);
+        setOriginalDescription(desc.trim());
         setAiWarnings(res.warnings ?? []);
+        setShowPreview(true);
         setShowAiInput(false);
         setAiDescription("");
       } else {
@@ -623,7 +630,7 @@ export function MembersPage() {
                   {showAiInput && (
                     <div className="mb-4 p-4 rounded-lg border border-amber-200 bg-amber-50/30 space-y-3">
                       <div className="flex items-center justify-between">
-                        <p className="text-xs font-medium text-stone-600">描述你的习惯，AI 会自动解析为结构化内容</p>
+                        <p className="text-xs font-medium text-stone-600">描述你的习惯，AI 会解析后显示预览供确认</p>
                         <button
                           onClick={() => setShowAiInput(false)}
                           className="p-1 rounded text-stone-400 hover:text-stone-600 transition-colors"
@@ -1287,6 +1294,206 @@ export function MembersPage() {
                   保存基本信息
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Parsing Preview Dialog */}
+      {showPreview && previewRoutine && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowPreview(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6 border-b border-stone-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-stone-800 mb-1">AI解析结果预览</h3>
+                  <p className="text-sm text-stone-500">请检查解析结果是否符合预期，可以修改后再保存</p>
+                </div>
+                {/* Confidence indicator */}
+                {(previewRoutine as any)?.confidence !== undefined && (
+                  <div className="text-right">
+                    <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${
+                      (previewRoutine as any).confidence >= 0.8 
+                        ? "bg-green-100 text-green-700"
+                        : (previewRoutine as any).confidence >= 0.6
+                        ? "bg-yellow-100 text-yellow-700"  
+                        : "bg-red-100 text-red-700"
+                    }`}>
+                      <span className={`w-2 h-2 rounded-full ${
+                        (previewRoutine as any).confidence >= 0.8 
+                          ? "bg-green-500"
+                          : (previewRoutine as any).confidence >= 0.6
+                          ? "bg-yellow-500"
+                          : "bg-red-500"
+                      }`} />
+                      置信度: {((previewRoutine as any).confidence * 100).toFixed(0)}%
+                    </div>
+                    <p className="text-xs text-stone-400 mt-1">
+                      {(previewRoutine as any).confidence >= 0.8 
+                        ? "解析质量良好" 
+                        : (previewRoutine as any).confidence >= 0.6
+                        ? "建议检查调整"
+                        : "需要仔细检查"}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-6 max-h-[calc(90vh-200px)] overflow-y-auto">
+              <div className="space-y-6">
+                {/* Original description */}
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-2">原始描述</label>
+                  <div className="px-3 py-2 rounded-lg bg-stone-50 border border-stone-200 text-sm text-stone-700">
+                    {originalDescription}
+                  </div>
+                </div>
+
+                {/* Parsed results */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-stone-500 mb-2">习惯名称</label>
+                    <input
+                      type="text"
+                      value={previewRoutine.title}
+                      onChange={(e) => setPreviewRoutine({ ...previewRoutine, title: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-stone-500 mb-2">执行时间</label>
+                    <input
+                      type="time"
+                      value={previewRoutine.time || ""}
+                      onChange={(e) => setPreviewRoutine({ ...previewRoutine, time: e.target.value || undefined })}
+                      className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Weekdays */}
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-2">重复周期</label>
+                  <div className="flex gap-2">
+                    {[0, 1, 2, 3, 4, 5, 6].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => {
+                          const wds = previewRoutine.weekdays.includes(d)
+                            ? previewRoutine.weekdays.filter((x) => x !== d)
+                            : [...previewRoutine.weekdays, d].sort();
+                          setPreviewRoutine({ ...previewRoutine, weekdays: wds });
+                        }}
+                        className={`w-9 h-9 rounded-full text-sm font-medium transition-colors ${
+                          previewRoutine.weekdays.includes(d)
+                            ? "bg-amber-500 text-white"
+                            : "bg-stone-100 text-stone-400 hover:bg-stone-200"
+                        }`}
+                      >
+                        {WEEKDAY_NAMES[d]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action chain preview */}
+                {(previewRoutine.actions ?? []).length > 0 && (
+                  <div>
+                    <label className="block text-xs font-medium text-stone-500 mb-2">执行链路预览</label>
+                    <div className="space-y-2">
+                      {formatActionChain(previewRoutine.actions ?? []).map((line, i) => {
+                        const action = previewRoutine.actions![i]!;
+                        const colors: Record<string, string> = {
+                          notify: "border-l-blue-400 bg-blue-50/50",
+                          plugin: "border-l-teal-400 bg-teal-50/50",
+                          ai_task: "border-l-purple-400 bg-purple-50/50",
+                        };
+                        const icons: Record<string, string> = { notify: "🔔", plugin: "🔧", ai_task: "🤖" };
+                        return (
+                          <div key={i} className={`px-3 py-2 rounded-r-lg border-l-3 text-xs text-stone-700 ${colors[action.type] ?? "border-l-stone-300 bg-stone-50"}`}>
+                            <span className="mr-2">{icons[action.type]}</span>
+                            {line}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-stone-400 mt-2">
+                      💡 执行顺序：AI任务先执行，然后发送通知给用户
+                    </p>
+                  </div>
+                )}
+
+                {/* Warnings */}
+                {aiWarnings.length > 0 && (
+                  <div className="p-4 rounded-lg bg-yellow-50 border border-yellow-200">
+                    <h4 className="text-sm font-medium text-yellow-800 mb-2">解析提醒</h4>
+                    <div className="space-y-1">
+                      {aiWarnings.map((w, i) => (
+                        <p key={i} className="text-xs text-yellow-700 flex items-start gap-1.5">
+                          <span className="mt-0.5 flex-shrink-0">⚠️</span>
+                          {w}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-stone-200 bg-stone-50 flex justify-between items-center">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setShowPreview(false);
+                    setShowAiInput(true);
+                    setAiDescription(originalDescription);
+                  }}
+                  className="px-4 py-2 rounded-lg text-sm text-amber-600 bg-amber-50 hover:bg-amber-100 transition-colors"
+                >
+                  重新解析
+                </button>
+                <button
+                  onClick={() => setShowPreview(false)}
+                  className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors"
+                >
+                  取消
+                </button>
+              </div>
+              
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    // Apply preview to editing routine and close preview
+                    setEditingRoutine(previewRoutine);
+                    setShowPreview(false);
+                    setAiWarnings(aiWarnings); // Keep warnings for main editor
+                  }}
+                  className="px-4 py-2 rounded-lg text-sm text-stone-700 bg-stone-200 hover:bg-stone-300 transition-colors"
+                >
+                  继续编辑
+                </button>
+                <button
+                  onClick={async () => {
+                    // Save directly from preview
+                    if (selectedId && previewRoutine) {
+                      try {
+                        await saveRoutine(previewRoutine);
+                        setShowPreview(false);
+                        setPreviewRoutine(null);
+                        setOriginalDescription("");
+                        setAiWarnings([]);
+                      } catch (err) {
+                        // Error handling is done in saveRoutine
+                      }
+                    }
+                  }}
+                  className="px-4 py-2 rounded-lg bg-green-500 text-white text-sm font-medium hover:bg-green-600 transition-colors"
+                >
+                  直接保存
+                </button>
+              </div>
             </div>
           </div>
         </div>

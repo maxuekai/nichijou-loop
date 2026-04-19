@@ -956,6 +956,24 @@ ${conversationText}
     prompt += `# 功能说明\n\n你有以下工具可以使用来帮助家庭成员管理生活。请根据对话自然地调用工具。\n`;
     prompt += `\n重要提示：当需要操作其他家庭成员时，请优先使用 resolve_member 工具通过姓名或昵称查找准确的成员ID。\n`;
 
+    prompt += `\n# 消息与提醒使用规则\n\n`;
+    prompt += `严格按以下规则选择 send_message 或 create_reminder 工具：\n\n`;
+    prompt += `## send_message 工具使用场景：\n`;
+    prompt += `- 立即发送给其他家庭成员 → 使用 send_message\n`;
+    prompt += `- 关键词：「现在告诉XX」「马上发给XX」「立即通知XX」「告诉他」\n`;
+    prompt += `- 用途：通知他人、转发结果、跨成员传话\n\n`;
+    prompt += `## create_reminder 工具使用场景：\n`;
+    prompt += `- 在未来特定时间提醒自己 → 使用 create_reminder\n`;
+    prompt += `- 关键词：「明天XX时提醒我」「下午X点提醒我」「X分钟后提醒我」\n`;
+    prompt += `- 用途：个人定时提醒、延时任务\n\n`;
+    prompt += `## 重要判断原则：\n`;
+    prompt += `1. 立即性 + 他人 = send_message\n`;
+    prompt += `2. 未来时间 + 自己 = create_reminder\n`;
+    prompt += `3. 创建提醒的强制流程：\n`;
+    prompt += `   - 先调用 confirm_reminder_time 确认时间理解\n`;
+    prompt += `   - 等用户明确确认后，再调用 create_reminder\n`;
+    prompt += `   - 绝不跳过时间确认步骤！\n\n`;
+
     prompt += `\n# 回复规则\n\n`;
     prompt += `- 回复时只输出最终结论和对用户有用的信息\n`;
     prompt += `- 不要输出思考过程、工具调用的中间步骤\n`;
@@ -1732,6 +1750,889 @@ ${conversationText}
   }
 
   async parseRoutineDescription(memberId: string, description: string): Promise<{ routine: Routine; warnings: string[] }> {
+    // 使用新的工具感知解析方法
+    return this.parseRoutineDescriptionWithTools(memberId, description);
+  }
+
+
+  /**
+   * 创建习惯解析专用的工具集
+   */
+  private createHabitParsingTools(): ToolDefinition[] {
+    const pluginTools = this.pluginHost.getAllTools();
+    
+    return [
+      // 工具验证和探索工具
+      {
+        name: "validate_plugin_tool",
+        description: "验证指定插件工具的参数要求和可用性，在生成habit动作前使用此工具确保参数正确",
+        parameters: {
+          type: "object",
+          properties: {
+            toolName: { type: "string", description: "要验证的工具名称" },
+            proposedParams: { 
+              type: "object", 
+              description: "拟议的工具参数",
+              additionalProperties: true
+            },
+          },
+          required: ["toolName"],
+        },
+        execute: async (params) => {
+          const toolName = params.toolName as string;
+          const proposedParams = params.proposedParams as Record<string, unknown> || {};
+          
+          // 查找工具
+          const tool = pluginTools.find(t => t.name === toolName);
+          if (!tool) {
+            return { 
+              content: `工具 "${toolName}" 不存在。可用的插件工具：${pluginTools.map(t => t.name).join(', ')}`,
+              isError: true 
+            };
+          }
+
+          // 验证必需参数
+          const schema = tool.parameters;
+          if (schema?.required && Array.isArray(schema.required)) {
+            const missingParams = schema.required.filter((param: string) => 
+              !(param in proposedParams)
+            );
+            if (missingParams.length > 0) {
+              return {
+                content: `工具 "${toolName}" 缺少必需参数: ${missingParams.join(', ')}。参数schema: ${JSON.stringify(schema.properties || {}, null, 2)}`,
+                isError: false, // 不是错误，是验证结果
+              };
+            }
+          }
+
+          return {
+            content: `工具 "${toolName}" 参数验证成功。描述: ${tool.description}`,
+            isError: false,
+          };
+        },
+      },
+      
+      // 时间解析和验证工具
+      {
+        name: "parse_time_expression",
+        description: "解析用户的时间表达式为具体的时间和星期设置",
+        parameters: {
+          type: "object",
+          properties: {
+            timeExpression: { type: "string", description: "用户的时间描述，如'每天早上8点'、'周一到周五晚上9点'" },
+          },
+          required: ["timeExpression"],
+        },
+        execute: async (params) => {
+          const expression = (params.timeExpression as string).toLowerCase();
+          const result: {
+            weekdays?: number[];
+            time?: string;
+            timeSlot?: "morning" | "afternoon" | "evening";
+            confidence: number;
+            warnings: string[];
+          } = {
+            confidence: 0.8,
+            warnings: [],
+          };
+
+          // 解析星期
+          if (expression.includes('每天') || expression.includes('每日')) {
+            result.weekdays = [0, 1, 2, 3, 4, 5, 6];
+          } else if (expression.includes('工作日') || expression.includes('周一到周五')) {
+            result.weekdays = [1, 2, 3, 4, 5];
+          } else if (expression.includes('周末')) {
+            result.weekdays = [0, 6];
+          } else {
+            // 解析具体星期
+            const weekdayMap: Record<string, number> = {
+              '周日': 0, '周一': 1, '周二': 2, '周三': 3, '周四': 4, '周五': 5, '周六': 6,
+              '星期日': 0, '星期一': 1, '星期二': 2, '星期三': 3, '星期四': 4, '星期五': 5, '星期六': 6,
+            };
+            
+            const foundWeekdays: number[] = [];
+            for (const [key, value] of Object.entries(weekdayMap)) {
+              if (expression.includes(key)) {
+                foundWeekdays.push(value);
+              }
+            }
+            
+            if (foundWeekdays.length > 0) {
+              result.weekdays = foundWeekdays.sort((a, b) => a - b);
+            } else {
+              result.weekdays = [0, 1, 2, 3, 4, 5, 6]; // 默认每天
+              result.warnings.push("未能识别具体星期，默认设为每天");
+              result.confidence = 0.5;
+            }
+          }
+
+          // 解析具体时间
+          const timeMatch = expression.match(/(\d{1,2})[:\：](\d{2})/);
+          if (timeMatch) {
+            const hour = parseInt(timeMatch[1]);
+            const minute = parseInt(timeMatch[2]);
+            if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+              result.time = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+            }
+          } else {
+            // 解析模糊时间
+            if (expression.includes('早上') || expression.includes('上午')) {
+              result.timeSlot = "morning";
+              if (!result.time) result.time = "08:00";
+            } else if (expression.includes('下午')) {
+              result.timeSlot = "afternoon";  
+              if (!result.time) result.time = "14:00";
+            } else if (expression.includes('晚上') || expression.includes('夜里')) {
+              result.timeSlot = "evening";
+              if (!result.time) result.time = "20:00";
+            }
+            
+            if (!result.time) {
+              result.time = "09:00";
+              result.warnings.push("未能识别具体时间，默认设为9:00");
+              result.confidence = Math.min(result.confidence, 0.6);
+            }
+          }
+
+          return {
+            content: JSON.stringify(result, null, 2),
+            isError: false,
+          };
+        },
+      },
+
+      // 动作类型推荐工具
+      {
+        name: "recommend_action_types", 
+        description: "根据用户的习惯描述推荐合适的动作类型组合",
+        parameters: {
+          type: "object",
+          properties: {
+            description: { type: "string", description: "用户的习惯描述" },
+            availableTools: { 
+              type: "array", 
+              items: { type: "string" },
+              description: "可用的插件工具名称列表"
+            },
+          },
+          required: ["description"],
+        },
+        execute: async (params) => {
+          const description = (params.description as string).toLowerCase();
+          const availableTools = params.availableTools as string[] || [];
+          
+          const recommendations: {
+            actionType: "notify" | "ai_task" | "plugin";
+            reason: string;
+            trigger: "before" | "at" | "after";
+            priority: number;
+            params?: Record<string, unknown>;
+            confidence?: number;
+          }[] = [];
+
+          // 1. 智能数据获取需求分析
+          const dataCategories = {
+            weather: { 
+              keywords: ['天气', '气温', '下雨', '晴天', '阴天', '温度', '风', '湿度', '穿衣'],
+              confidence: 0.9,
+              prompt: "查询天气信息并提供穿衣建议"
+            },
+            news: { 
+              keywords: ['新闻', '资讯', '热点', '头条', '事件'],
+              confidence: 0.8,
+              prompt: "获取最新新闻资讯摘要"
+            },
+            financial: { 
+              keywords: ['股价', '汇率', '股票', '基金', '金融'],
+              confidence: 0.85,
+              prompt: "查询金融市场数据"
+            },
+            traffic: { 
+              keywords: ['路况', '交通', '堵车', '地铁'],
+              confidence: 0.8,
+              prompt: "查询交通路况信息"
+            },
+            health: { 
+              keywords: ['血压', '心率', '体重', '健康', '睡眠'],
+              confidence: 0.75,
+              prompt: "获取健康监测数据"
+            },
+            schedule: { 
+              keywords: ['日程', '会议', '安排', '计划表', '约会'],
+              confidence: 0.8,
+              prompt: "检查今日日程安排"
+            }
+          };
+
+          let bestDataMatch: { category: string; confidence: number; prompt: string } | null = null;
+          
+          for (const [category, config] of Object.entries(dataCategories)) {
+            const matchCount = config.keywords.filter(kw => description.includes(kw)).length;
+            if (matchCount > 0) {
+              const matchConfidence = Math.min(matchCount * 0.3 + 0.4, config.confidence);
+              if (!bestDataMatch || matchConfidence > bestDataMatch.confidence) {
+                bestDataMatch = { category, confidence: matchConfidence, prompt: config.prompt };
+              }
+            }
+          }
+
+          if (bestDataMatch) {
+            recommendations.push({
+              actionType: "ai_task",
+              reason: `检测到${bestDataMatch.category}数据需求`,
+              trigger: "at",
+              priority: 1,
+              confidence: bestDataMatch.confidence,
+              params: { prompt: bestDataMatch.prompt }
+            });
+          }
+
+          // 2. 智能通知类型分析
+          const notificationTypes = {
+            remind: { keywords: ['提醒', '提示', '叫醒', '催促'], urgency: 'normal' },
+            inform: { keywords: ['告诉', '通知', '报告', '汇报'], urgency: 'low' },
+            alert: { keywords: ['警告', '注意', '小心', '当心'], urgency: 'high' },
+            broadcast: { keywords: ['播报', '发送', '推送', '发布'], urgency: 'medium' }
+          };
+
+          let bestNotifyType: { type: string; urgency: string; confidence: number } | null = null;
+          
+          for (const [type, config] of Object.entries(notificationTypes)) {
+            const matches = config.keywords.filter(kw => description.includes(kw)).length;
+            if (matches > 0) {
+              const confidence = Math.min(matches * 0.4 + 0.3, 0.9);
+              if (!bestNotifyType || confidence > bestNotifyType.confidence) {
+                bestNotifyType = { type, urgency: config.urgency, confidence };
+              }
+            }
+          }
+
+          // 3. 时机智能分析
+          const timingPatterns = {
+            before: { keywords: ['提前', '之前', '先', '预先'], offset: -5 },
+            at: { keywords: ['到时', '准时', '当时', '立即'], offset: 0 },
+            after: { keywords: ['之后', '后来', '完成后', '结束后'], offset: 5 }
+          };
+
+          let bestTiming: { trigger: "before" | "at" | "after"; offset: number } = { trigger: "at", offset: 0 };
+          for (const [timing, config] of Object.entries(timingPatterns)) {
+            if (config.keywords.some(kw => description.includes(kw))) {
+              bestTiming = { trigger: timing as "before" | "at" | "after", offset: config.offset };
+              break;
+            }
+          }
+
+          // 4. 添加通知推荐
+          if (bestNotifyType || bestDataMatch) {
+            let message = "习惯提醒";
+            let trigger = bestTiming.trigger;
+
+            if (bestDataMatch) {
+              message = "{{result}}";
+              trigger = "after"; // 数据任务后发送结果
+            } else if (bestNotifyType?.urgency === 'high') {
+              message = `⚠️ 注意：${description.slice(0, 30)}`;
+            } else if (bestNotifyType?.urgency === 'low') {
+              message = description.slice(0, 50);
+            }
+
+            recommendations.push({
+              actionType: "notify",
+              reason: bestDataMatch 
+                ? "发送数据查询结果" 
+                : `执行${bestNotifyType?.type || 'basic'}通知`,
+              trigger,
+              priority: bestDataMatch ? 2 : 1,
+              confidence: bestNotifyType?.confidence || 0.7,
+              params: { message }
+            });
+          }
+
+          // 5. 智能插件匹配
+          if (availableTools.length > 0) {
+            const toolPatterns: Record<string, string[]> = {
+              weather: ['天气', 'weather'],
+              news: ['新闻', 'news'],
+              fitness: ['健身', '运动', '锻炼', 'fitness'],
+              calendar: ['日程', '会议', 'calendar'],
+              finance: ['股价', '金融', 'stock', 'finance']
+            };
+
+            for (const tool of availableTools) {
+              let matchScore = 0;
+              const toolLower = tool.toLowerCase();
+              
+              // 直接匹配
+              if (description.includes(toolLower)) {
+                matchScore += 0.8;
+              }
+
+              // 模式匹配
+              for (const [pattern, keywords] of Object.entries(toolPatterns)) {
+                if (toolLower.includes(pattern)) {
+                  const keywordMatches = keywords.filter(kw => description.includes(kw)).length;
+                  matchScore += keywordMatches * 0.25;
+                }
+              }
+
+              if (matchScore >= 0.4) {
+                recommendations.push({
+                  actionType: "plugin",
+                  reason: `智能匹配插件: ${tool} (匹配度: ${(matchScore * 100).toFixed(0)}%)`,
+                  trigger: bestTiming.trigger,
+                  priority: Math.ceil(3 - matchScore * 2), // 匹配度越高优先级越高
+                  confidence: Math.min(matchScore, 0.95),
+                  params: { toolName: tool }
+                });
+              }
+            }
+          }
+
+          // 6. 复杂逻辑检测
+          const complexityMarkers = {
+            conditional: ['如果', '当', '假如', '要是'],
+            sequential: ['然后', '接着', '之后', '先'],
+            parallel: ['同时', '并且', '一边'],
+            choice: ['或者', '或是', '要么']
+          };
+
+          let complexityType: string | null = null;
+          for (const [type, markers] of Object.entries(complexityMarkers)) {
+            if (markers.some(marker => description.includes(marker))) {
+              complexityType = type;
+              break;
+            }
+          }
+
+          if (complexityType && !recommendations.some(r => r.actionType === 'ai_task')) {
+            recommendations.push({
+              actionType: "ai_task",
+              reason: `检测到${complexityType}逻辑，使用AI智能处理`,
+              trigger: "at",
+              priority: 1,
+              confidence: 0.75,
+              params: { prompt: `智能处理复杂习惯逻辑：${description}` }
+            });
+          }
+
+          // 7. 兜底策略
+          if (recommendations.length === 0) {
+            recommendations.push({
+              actionType: "notify",
+              reason: "默认习惯提醒（未识别特定需求）",
+              trigger: "at",
+              priority: 1,
+              confidence: 0.5,
+              params: { message: "习惯提醒" }
+            });
+          }
+
+          // 8. 质量评估和排序
+          const finalRecommendations = recommendations
+            .sort((a, b) => {
+              const priorityDiff = a.priority - b.priority;
+              if (priorityDiff !== 0) return priorityDiff;
+              return (b.confidence || 0.6) - (a.confidence || 0.6);
+            })
+            .slice(0, 3); // 限制推荐数量
+
+          const avgConfidence = finalRecommendations.length > 0
+            ? finalRecommendations.reduce((sum, r) => sum + (r.confidence || 0.6), 0) / finalRecommendations.length
+            : 0.5;
+
+          return {
+            content: JSON.stringify({
+              recommendations: finalRecommendations,
+              confidence: avgConfidence,
+              complexity: complexityType ? 'high' : bestDataMatch ? 'medium' : 'simple',
+              analysis: {
+                dataTaskDetected: !!bestDataMatch,
+                dataCategory: bestDataMatch?.category,
+                notificationType: bestNotifyType?.type,
+                timingPreference: bestTiming.trigger,
+                complexityType,
+                toolsEvaluated: availableTools.length,
+                matchedTools: finalRecommendations.filter(r => r.actionType === 'plugin').length
+              }
+            }, null, 2),
+            isError: false,
+          };
+        },
+      },
+
+      // 生成最终习惯结构工具
+      {
+        name: "generate_routine_structure",
+        description: "基于分析结果生成最终的习惯结构",
+        parameters: {
+          type: "object", 
+          properties: {
+            title: { type: "string", description: "习惯标题" },
+            timeInfo: { 
+              type: "object",
+              description: "时间信息（来自parse_time_expression的结果）",
+              additionalProperties: true
+            },
+            actionRecommendations: {
+              type: "array",
+              description: "动作推荐（来自recommend_action_types的结果）",
+              items: { type: "object", additionalProperties: true }
+            },
+            originalDescription: { type: "string", description: "用户原始描述" },
+          },
+          required: ["title", "timeInfo", "actionRecommendations", "originalDescription"],
+        },
+        execute: async (params) => {
+          const title = params.title as string;
+          const timeInfo = params.timeInfo as any;
+          const actionRecommendations = params.actionRecommendations as any[];
+          const originalDescription = params.originalDescription as string;
+
+          // 构建actions数组
+          const actions: any[] = [];
+          
+          for (const rec of actionRecommendations) {
+            const actionId = `act_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 5)}`;
+            
+            const baseAction = {
+              id: actionId,
+              type: rec.actionType,
+              trigger: rec.trigger,
+              offsetMinutes: 0,
+              channel: "wechat",
+            };
+
+            switch (rec.actionType) {
+              case "notify":
+                actions.push({
+                  ...baseAction,
+                  message: rec.params?.message || title,
+                });
+                break;
+                
+              case "ai_task":
+                actions.push({
+                  ...baseAction,
+                  prompt: rec.params?.prompt || `执行习惯任务：${originalDescription}`,
+                });
+                break;
+                
+              case "plugin":
+                actions.push({
+                  ...baseAction,
+                  toolName: rec.params?.toolName,
+                  toolParams: rec.params?.toolParams || {},
+                });
+                break;
+            }
+          }
+
+          const routine = {
+            id: `rtn_${Date.now().toString(36)}`,
+            title,
+            description: originalDescription,
+            weekdays: timeInfo.weekdays || [0, 1, 2, 3, 4, 5, 6],
+            time: timeInfo.time,
+            timeSlot: timeInfo.timeSlot,
+            reminders: [],
+            actions,
+            confidence: Math.min(timeInfo.confidence || 0.8, 0.9),
+            toolValidations: [] as any[], // 将在工具验证后填充
+          };
+
+          return {
+            content: JSON.stringify(routine, null, 2),
+            isError: false,
+          };
+        },
+      },
+    ];
+  }
+
+  /**
+   * 工具感知的习惯解析方法，支持真正的工具调用和参数验证
+   */
+  async parseRoutineDescriptionWithTools(memberId: string, description: string): Promise<{ routine: Routine; warnings: string[] }> {
+    const member = this.familyManager.getMember(memberId);
+    const existing = this.routineEngine.getRoutines(memberId);
+    const { display, iso } = this.formatNow();
+    const warnings: string[] = [];
+
+    const pluginTools = this.pluginHost.getAvailableTools();
+    const availableToolNames = pluginTools.map(t => t.toolName);
+    
+    // 构建解析专用的系统提示
+    const parseSystemPrompt = [
+      "你是家庭AI管家的高级习惯解析助手。你需要分析用户的习惯描述，并使用提供的工具来生成准确的习惯配置。",
+      "",
+      `当前时间: ${display} (${iso})`,
+      member ? `当前成员: ${member.name}` : "",
+      "",
+      "# 解析流程",
+      "1. 使用 parse_time_expression 工具分析时间表达式",
+      "2. 使用 recommend_action_types 工具获取动作类型推荐",
+      "3. 如果推荐包含 plugin 类型，使用 validate_plugin_tool 验证工具参数",
+      "4. 使用 generate_routine_structure 工具生成最终结构",
+      "",
+      "# 可用的插件工具",
+      pluginTools.length > 0 
+        ? pluginTools.map((t) => `  - ${t.toolName}（${t.pluginName}）: ${t.description}`).join("\n")
+        : "  （暂无已安装插件）",
+      "",
+      existing.length > 0 ? `# 已有习惯（避免重复）\n${existing.map((r) => `- ${r.title} (${r.weekdays.map((d) => ["日","一","二","三","四","五","六"][d]).join("、")}${r.time ? " " + r.time : ""})`).join("\n")}` : "",
+      "",
+      "# 解析要求",
+      "- 必须按顺序使用工具进行分析",
+      "- 优先使用 ai_task 而非直接的 plugin 调用（除非用户明确要求特定插件）",
+      "- 仔细验证工具参数的正确性",
+      "- 如果某个功能需要插件但插件未安装，记录到warnings中",
+      "- 最终调用 generate_routine_structure 工具输出结果",
+    ].filter(Boolean).join("\n");
+
+    // 创建解析专用的Agent Session
+    const parseSession = createAgentSession({
+      provider: this.getProvider(),
+      systemPrompt: parseSystemPrompt,
+      tools: this.createHabitParsingTools(),
+      maxTurns: 15, // 允许多轮工具调用
+    });
+
+    let finalResult: any = null;
+    let confidence = 0.8;
+    const toolValidations: string[] = [];
+
+    try {
+      // 开始解析对话
+      await parseSession.prompt(`请解析这个习惯描述：${description}`);
+      
+      // 获取最终的Agent消息
+      const messages = parseSession.getMessages();
+      const lastAssistantMessage = messages
+        .filter((msg: any) => msg.role === "assistant")
+        .pop();
+
+      if (lastAssistantMessage) {
+        // 尝试从最后的助手回复中提取JSON结果
+        try {
+          const jsonMatch = lastAssistantMessage.content.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            finalResult = JSON.parse(jsonMatch[0]);
+          }
+        } catch (parseError) {
+          console.warn("[HabitParsing] 无法从Agent回复中解析JSON，使用降级解析");
+        }
+      }
+
+      // 检查工具调用记录
+      const toolCalls = messages.filter((msg: any) => msg.role === "assistant" && msg.toolCalls);
+      for (const toolCall of toolCalls) {
+        if (toolCall.toolCalls) {
+          for (const call of toolCall.toolCalls) {
+            toolValidations.push(`调用了工具: ${call.function.name}`);
+          }
+        }
+      }
+
+      // 如果Agent解析失败，降级到原始方法
+      if (!finalResult) {
+        console.warn("[HabitParsing] Agent解析失败，使用降级方法");
+        return this.parseRoutineDescriptionFallback(memberId, description);
+      }
+
+    } catch (error) {
+      console.error("[HabitParsing] Agent解析过程出错", error);
+      warnings.push("AI解析过程出现错误，使用基础解析模式");
+      return this.parseRoutineDescriptionFallback(memberId, description);
+    }
+
+    // 处理解析结果
+    const routine: Routine = {
+      id: finalResult.id || `rtn_${Date.now().toString(36)}`,
+      title: finalResult.title || description.slice(0, 50),
+      description,
+      weekdays: finalResult.weekdays || [0, 1, 2, 3, 4, 5, 6],
+      time: finalResult.time,
+      timeSlot: finalResult.timeSlot,
+      reminders: [],
+      actions: finalResult.actions || [],
+    };
+
+    // 计算综合置信度
+    const parseConfidence = this.calculateParsingConfidence(routine, description, toolValidations);
+    
+    // 收集置信度相关的警告
+    if (parseConfidence < 0.5) {
+      warnings.push("AI解析置信度很低，强烈建议手动检查和调整所有设置");
+    } else if (parseConfidence < 0.7) {
+      warnings.push("AI解析置信度较低，建议仔细检查生成的习惯设置");
+    }
+
+    // 收集来自解析结果的警告
+    if (finalResult.confidence && finalResult.confidence < 0.7) {
+      warnings.push("工具解析过程中检测到不确定因素");
+    }
+
+    // 收集工具验证警告
+    if (finalResult.warnings && Array.isArray(finalResult.warnings)) {
+      warnings.push(...finalResult.warnings);
+    }
+
+    // 记录解析统计信息用于持续优化
+    this.logParsingAnalytics(memberId, description, routine, parseConfidence, warnings.length > 0);
+
+    // 将置信度信息添加到返回结果中
+    (routine as any).confidence = parseConfidence;
+
+    // 验证至少有一个动作
+    if (!routine.actions || routine.actions.length === 0) {
+      // 对于空习惯，智能判断是否需要通知
+      const shouldAddNotify = this.shouldRequireNotifyAction([], description);
+      
+      if (shouldAddNotify) {
+        routine.actions = [{
+          id: `act_${Date.now().toString(36)}_default`,
+          type: "notify",
+          trigger: "at",
+          offsetMinutes: 0,
+          channel: "wechat",
+          message: routine.title,
+        }];
+        warnings.push("未生成具体动作，已添加默认通知");
+      } else {
+        // 允许创建无动作的习惯（如用于占位或静默任务）
+        routine.actions = [];
+        warnings.push("此习惯无具体动作，将以静默方式执行");
+      }
+    } else {
+      // 对于有动作的习惯，检查是否需要添加notify
+      const hasNotify = routine.actions.some(action => action.type === "notify");
+      if (!hasNotify) {
+        const shouldAddNotify = this.shouldRequireNotifyAction(routine.actions, description);
+        
+        if (shouldAddNotify) {
+          routine.actions.unshift({
+            id: `act_${Date.now().toString(36)}_notify`,
+            type: "notify",
+            trigger: "after",
+            offsetMinutes: 0,
+            channel: "wechat",
+            message: "{{result}}",
+          });
+          warnings.push("已自动添加结果通知，如不需要可手动移除");
+        } else {
+          warnings.push("此习惯设计为静默执行，不会发送通知");
+        }
+      }
+    }
+
+    return { routine, warnings };
+  }
+
+  /**
+   * 计算AI解析结果的综合置信度评分
+   */
+  private calculateParsingConfidence(routine: Routine, description: string, toolValidations: string[]): number {
+    let confidenceScore = 0.8; // 基础置信度
+    const issues: string[] = [];
+
+    // 1. 检查基本字段完整性
+    if (!routine.title || routine.title.length < 2) {
+      confidenceScore -= 0.2;
+      issues.push("标题不完整或过短");
+    }
+
+    if (!routine.weekdays || routine.weekdays.length === 0) {
+      confidenceScore -= 0.15;
+      issues.push("未识别出重复周期");
+    }
+
+    // 2. 检查时间解析质量
+    const timeKeywords = ['点', '时', '分钟', '上午', '下午', '晚上', '早上', 'am', 'pm'];
+    const hasTimeWords = timeKeywords.some(keyword => description.toLowerCase().includes(keyword));
+    
+    if (hasTimeWords && !routine.time && !routine.timeSlot) {
+      confidenceScore -= 0.1;
+      issues.push("描述中提到时间但未能解析");
+    }
+
+    if (routine.time) {
+      // 检查时间格式的合理性
+      const [hours, minutes] = routine.time.split(':').map(Number);
+      if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        confidenceScore -= 0.15;
+        issues.push("时间格式不正确");
+      }
+    }
+
+    // 3. 检查动作链的逻辑性
+    const actions = routine.actions || [];
+    if (actions.length === 0) {
+      confidenceScore -= 0.1;
+      issues.push("未生成任何执行动作");
+    } else {
+      // 检查动作类型的合理性
+      const aiTasks = actions.filter(a => a.type === 'ai_task');
+      const notifications = actions.filter(a => a.type === 'notify');
+      
+      // 如果有AI任务但没有通知，可能不合理（除非是静默任务）
+      if (aiTasks.length > 0 && notifications.length === 0) {
+        const silentKeywords = ['自动', '静默', '后台', '同步'];
+        const isSilentTask = silentKeywords.some(kw => description.includes(kw));
+        if (!isSilentTask) {
+          confidenceScore -= 0.05;
+          issues.push("有AI任务但缺少用户通知");
+        }
+      }
+
+      // 检查prompt质量
+      for (const action of aiTasks) {
+        if (!action.prompt || action.prompt.length < 5) {
+          confidenceScore -= 0.08;
+          issues.push("AI任务描述过于简单");
+        }
+      }
+
+      // 检查通知消息质量
+      for (const notification of notifications) {
+        if (notification.message && notification.message !== "{{result}}" && notification.message.length < 2) {
+          confidenceScore -= 0.05;
+          issues.push("通知消息内容过于简单");
+        }
+      }
+    }
+
+    // 4. 检查描述与解析结果的匹配度
+    const descWords = description.toLowerCase();
+    const titleWords = routine.title.toLowerCase();
+    
+    // 简单的关键词匹配检查
+    const commonWords = ['的', '了', '在', '和', '或', '与', '及', '、'];
+    const descKeywords = descWords.split(/[\s\p{P}]+/u).filter(w => w.length > 1 && !commonWords.includes(w));
+    const titleKeywords = titleWords.split(/[\s\p{P}]+/u).filter(w => w.length > 1 && !commonWords.includes(w));
+    
+    let matchedKeywords = 0;
+    for (const keyword of descKeywords.slice(0, 5)) { // 只检查前5个关键词
+      if (titleKeywords.some(tw => tw.includes(keyword) || keyword.includes(tw))) {
+        matchedKeywords++;
+      }
+    }
+    
+    const keywordMatchRate = descKeywords.length > 0 ? matchedKeywords / Math.min(descKeywords.length, 5) : 1;
+    if (keywordMatchRate < 0.3) {
+      confidenceScore -= 0.1;
+      issues.push("标题与描述关键词匹配度低");
+    }
+
+    // 5. 工具验证结果的影响
+    if (toolValidations.length === 0 && actions.some(a => a.type === 'plugin' || a.type === 'ai_task')) {
+      confidenceScore -= 0.05;
+      issues.push("未进行工具可用性验证");
+    }
+
+    // 6. 复杂度调整
+    const complexityWords = ['如果', '当', '然后', '并且', '或者', '除非', '同时'];
+    const hasComplexLogic = complexityWords.some(word => description.includes(word));
+    if (hasComplexLogic && actions.length < 2) {
+      confidenceScore -= 0.08;
+      issues.push("描述较复杂但解析结果过于简单");
+    }
+
+    // 确保置信度在 0-1 范围内
+    confidenceScore = Math.max(0, Math.min(1, confidenceScore));
+
+    // 记录分析过程（用于调试和优化）
+    console.log(`[ParsingConfidence] 描述: "${description.slice(0, 50)}..." | 置信度: ${confidenceScore.toFixed(2)} | 问题: [${issues.join(', ')}]`);
+
+    return confidenceScore;
+  }
+
+  /**
+   * 记录解析分析数据用于持续优化
+   */
+  private logParsingAnalytics(memberId: string, description: string, routine: Routine, confidence: number, hasWarnings: boolean): void {
+    try {
+      const analytics = {
+        memberId,
+        descriptionLength: description.length,
+        confidence,
+        hasWarnings,
+        actionsCount: routine.actions?.length || 0,
+        hasTime: !!routine.time,
+        hasTimeSlot: !!routine.timeSlot,
+        weekdaysCount: routine.weekdays?.length || 0,
+        titleLength: routine.title?.length || 0,
+        timestamp: new Date().toISOString(),
+      };
+
+      // 记录到数据库中（可以用于后续分析和模型优化）
+      // 使用现有的saveConversationLog方法记录分析数据
+      this.db.saveConversationLog(memberId, description, 'habit_parsing_analytics', JSON.stringify(analytics));
+    } catch (error) {
+      console.error('[ParsingAnalytics] 记录解析分析数据失败:', error);
+    }
+  }
+
+  /**
+   * 智能判断是否需要强制添加notify动作
+   */
+  private shouldRequireNotifyAction(actions: RoutineAction[], description: string): boolean {
+    // 检查是否有需要用户知晓结果的动作类型
+    const hasUserVisibleActions = actions.some(action => {
+      // ai_task 通常需要用户知晓结果
+      if (action.type === 'ai_task') {
+        // 检查prompt是否涉及用户关心的信息
+        const prompt = action.prompt?.toLowerCase() || '';
+        const userCareKeywords = ['天气', '新闻', '提醒', '通知', '告诉', '查询', '获取', '播报'];
+        return userCareKeywords.some(keyword => prompt.includes(keyword));
+      }
+      
+      // plugin 类型需要根据具体功能判断
+      if (action.type === 'plugin') {
+        const toolName = action.toolName?.toLowerCase() || '';
+        // 信息获取类插件通常需要用户知晓
+        const infoCareTools = ['weather', 'news', 'stock', 'calendar'];
+        return infoCareTools.some(tool => toolName.includes(tool));
+      }
+      
+      return false;
+    });
+
+    // 分析习惯描述中的意图
+    const descLower = description.toLowerCase();
+    
+    // 明确的静默执行关键词
+    const silentKeywords = ['自动', '静默', '后台', '同步', '备份', '清理'];
+    const isSilentTask = silentKeywords.some(keyword => descLower.includes(keyword));
+    
+    // 明确的通知需求关键词
+    const notifyKeywords = ['提醒', '通知', '告诉', '播报', '发送', '推送'];
+    const needsNotification = notifyKeywords.some(keyword => descLower.includes(keyword));
+    
+    // 判断逻辑：
+    // 1. 如果明确要求静默执行，不添加notify
+    if (isSilentTask && !needsNotification) {
+      return false;
+    }
+    
+    // 2. 如果明确要求通知，或有用户关心的动作，添加notify
+    if (needsNotification || hasUserVisibleActions) {
+      return true;
+    }
+    
+    // 3. 如果没有任何动作，或只有自动化动作，不强制添加notify
+    if (actions.length === 0) {
+      return true; // 空习惯仍需要基础通知
+    }
+    
+    // 4. 默认情况：有动作但不确定用户意图时，保守添加notify
+    return true;
+  }
+
+  /**
+   * 降级解析方法（保持原有逻辑）
+   */
+  private async parseRoutineDescriptionFallback(memberId: string, description: string): Promise<{ routine: Routine; warnings: string[] }> {
+    // 保持原有的parseRoutineDescription逻辑作为降级方案
     const member = this.familyManager.getMember(memberId);
     const existing = this.routineEngine.getRoutines(memberId);
     const { display, iso } = this.formatNow();
@@ -1830,15 +2731,22 @@ ${conversationText}
       })),
     };
 
+    // 智能判断是否需要添加notify动作
     if (!routine.actions!.some((a) => a.type === "notify")) {
-      routine.actions!.unshift({
-        id: `act_${Date.now().toString(36)}_default`,
-        type: "notify",
-        trigger: "at",
-        offsetMinutes: 0,
-        channel: "wechat",
-        message: routine.actions!.some((a) => a.type === "ai_task") ? "{{result}}" : routine.title,
-      });
+      const shouldAddNotify = this.shouldRequireNotifyAction(routine.actions!, description);
+      
+      if (shouldAddNotify) {
+        routine.actions!.unshift({
+          id: `act_${Date.now().toString(36)}_default`,
+          type: "notify",
+          trigger: "at",
+          offsetMinutes: 0,
+          channel: "wechat",
+          message: routine.actions!.some((a) => a.type === "ai_task") ? "{{result}}" : routine.title,
+        });
+      } else {
+        warnings.push("此习惯被设计为静默执行（无通知），如需通知请手动添加");
+      }
     }
 
     if (routine.actions!.some((a) => a.type === "ai_task")) {
