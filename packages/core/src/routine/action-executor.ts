@@ -144,6 +144,22 @@ export class ActionExecutor {
     context: ActionExecutionContext,
   ): Promise<void> {
     console.log(`[ActionExecutor] 执行 action: ${action.type} for routine "${routine.title}" member=${memberId}`);
+    
+    // 执行前参数验证
+    const validationResult = this.validateActionParameters(action);
+    if (!validationResult.isValid) {
+      console.error(`[ActionExecutor] 参数验证失败 ${action.id}:`, validationResult.errors);
+      this.db.logActionExecution(
+        memberId, 
+        routine.id, 
+        action.id, 
+        `参数验证失败: ${validationResult.errors.join(", ")}`, 
+        false, 
+        minuteKey
+      );
+      return;
+    }
+    
     let result = "";
     let success = true;
 
@@ -257,5 +273,174 @@ export class ActionExecutor {
       if (offsetDiff !== 0) return offsetDiff;
       return typeRank(a.type) - typeRank(b.type);
     });
+  }
+
+  /**
+   * 验证Action参数的有效性
+   */
+  private validateActionParameters(action: RoutineAction): { isValid: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    // 基础字段验证
+    if (!action.id || typeof action.id !== 'string') {
+      errors.push("缺少有效的action ID");
+    }
+
+    if (!action.type || !['notify', 'plugin', 'ai_task'].includes(action.type)) {
+      errors.push(`无效的action类型: ${action.type}`);
+    }
+
+    if (!action.trigger || !['before', 'at', 'after'].includes(action.trigger)) {
+      errors.push(`无效的触发时机: ${action.trigger}`);
+    }
+
+    if (typeof action.offsetMinutes !== 'number' || action.offsetMinutes < 0) {
+      errors.push(`无效的偏移分钟数: ${action.offsetMinutes}`);
+    }
+
+    // 类型特定验证
+    switch (action.type) {
+      case 'notify':
+        // notify类型可以没有message（会使用默认值），所以不强制验证
+        break;
+
+      case 'plugin':
+        if (!action.toolName || typeof action.toolName !== 'string') {
+          errors.push("plugin类型缺少toolName");
+        } else {
+          // 验证工具是否存在
+          const availableTools = this.pluginHost.getAvailableTools();
+          const toolExists = availableTools.some(tool => tool.toolName === action.toolName);
+          if (!toolExists) {
+            errors.push(`插件工具不存在: ${action.toolName}`);
+          }
+        }
+
+        // 验证toolParams格式
+        if (action.toolParams && typeof action.toolParams !== 'object') {
+          errors.push("toolParams必须是对象格式");
+        }
+        break;
+
+      case 'ai_task':
+        if (!action.prompt || typeof action.prompt !== 'string' || action.prompt.trim().length === 0) {
+          errors.push("ai_task类型缺少有效的prompt");
+        }
+        break;
+    }
+
+    // 渠道验证
+    if (action.channel && !['wechat', 'dashboard', 'both'].includes(action.channel)) {
+      errors.push(`无效的通知渠道: ${action.channel}`);
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors
+    };
+  }
+
+  /**
+   * 测试单个Action的执行（用于调试）
+   */
+  async testAction(
+    memberId: string, 
+    routine: Routine, 
+    action: RoutineAction
+  ): Promise<{ success: boolean; result: string; errors?: string[] }> {
+    try {
+      // 先进行参数验证
+      const validationResult = this.validateActionParameters(action);
+      if (!validationResult.isValid) {
+        return {
+          success: false,
+          result: "参数验证失败",
+          errors: validationResult.errors
+        };
+      }
+
+      // 创建测试上下文
+      const testContext: ActionExecutionContext = {
+        latestTaskResult: "测试结果",
+        hasNotifyAction: routine.actions?.some(a => a.type === 'notify') ?? false
+      };
+
+      console.log(`[ActionExecutor] 测试执行 action: ${action.id}`);
+      
+      let result = "";
+      let success = true;
+
+      try {
+        switch (action.type) {
+          case "notify": {
+            const template = (action.message ?? "").trim();
+            if (template.includes("{{result}}")) {
+              result = template.replace(/\{\{result\}\}/g, testContext.latestTaskResult ?? "");
+            } else if (template) {
+              result = template;
+            } else {
+              result = testContext.latestTaskResult ?? "";
+            }
+            break;
+          }
+
+          case "plugin": {
+            if (!action.toolName) {
+              result = "toolName not configured";
+              success = false;
+              break;
+            }
+            const params = { ...(action.toolParams ?? {}) };
+            
+            // 注入家庭位置信息（如果需要）
+            if (action.toolName === "weather_query" && !params.city) {
+              const family = this.familyManager.getFamily();
+              if (family?.homeAdcode) {
+                params.city = family.homeAdcode;
+              } else if (family?.homeCity) {
+                params.city = family.homeCity;
+              }
+            }
+            
+            const toolResult = await this.pluginHost.executeTool(action.toolName, params);
+            result = toolResult.content;
+            success = !toolResult.isError;
+            break;
+          }
+
+          case "ai_task": {
+            const taskPrompt = `【习惯任务】${routine.title}\n\n${action.prompt}`;
+            
+            if (this.chatFn) {
+              result = await this.chatFn(memberId, taskPrompt);
+            } else {
+              result = `AI任务模拟结果: ${action.prompt}`;
+            }
+            success = true;
+            break;
+          }
+
+          default:
+            result = `未知的action类型: ${action.type}`;
+            success = false;
+        }
+
+        return { success, result };
+
+      } catch (actionError) {
+        console.error(`[ActionExecutor] 测试执行失败:`, actionError);
+        return {
+          success: false,
+          result: `执行出错: ${actionError instanceof Error ? actionError.message : String(actionError)}`
+        };
+      }
+
+    } catch (error) {
+      console.error(`[ActionExecutor] 测试准备失败:`, error);
+      return {
+        success: false,
+        result: `测试准备失败: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
   }
 }

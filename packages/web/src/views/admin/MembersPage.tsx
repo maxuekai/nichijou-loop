@@ -23,6 +23,178 @@ const WarningIcon = createIconWrapper(ExclamationTriangleIcon);
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
 
+// 常用场景模板
+const SCENARIO_TEMPLATES = [
+  {
+    id: "daily_news",
+    name: "每日新闻",
+    description: "每天早上播报当日新闻摘要",
+    category: "新闻播报",
+    template: {
+      title: "每日新闻播报",
+      weekdays: [1, 2, 3, 4, 5], // 工作日
+      time: "08:00",
+      actions: [
+        {
+          id: "act_news_daily",
+          type: "ai_task" as const,
+          trigger: "at" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          prompt: "获取今日重要新闻资讯，整理成简洁摘要"
+        },
+        {
+          id: "act_news_notify",
+          type: "notify" as const,
+          trigger: "after" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          message: "{{result}}"
+        }
+      ]
+    }
+  },
+  {
+    id: "weekly_news",
+    name: "新闻周刊",
+    description: "每周日晚上播报一周新闻汇总",
+    category: "新闻播报",
+    template: {
+      title: "新闻周刊播报",
+      weekdays: [0], // 周日
+      time: "20:00",
+      actions: [
+        {
+          id: "act_weekly_news",
+          type: "plugin" as const,
+          trigger: "at" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          toolName: "news_fetch",
+          toolParams: { mode: "weekly", limit: 15 }
+        },
+        {
+          id: "act_weekly_notify",
+          type: "notify" as const,
+          trigger: "after" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          message: "{{result}}"
+        }
+      ]
+    }
+  },
+  {
+    id: "morning_weather",
+    name: "早晨天气",
+    description: "每天早上播报当日天气和穿衣建议",
+    category: "天气播报",
+    template: {
+      title: "早晨天气播报",
+      weekdays: [0, 1, 2, 3, 4, 5, 6], // 每天
+      time: "07:30",
+      actions: [
+        {
+          id: "act_weather_morning",
+          type: "ai_task" as const,
+          trigger: "at" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          prompt: "查询今天的天气情况，并根据天气给出穿衣和出行建议"
+        },
+        {
+          id: "act_weather_notify",
+          type: "notify" as const,
+          trigger: "after" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          message: "{{result}}"
+        }
+      ]
+    }
+  },
+  {
+    id: "travel_weather",
+    name: "出行天气",
+    description: "出门前15分钟提醒查看天气",
+    category: "天气播报", 
+    template: {
+      title: "出行天气提醒",
+      weekdays: [1, 2, 3, 4, 5], // 工作日
+      time: "08:45", // 假设9点出门
+      actions: [
+        {
+          id: "act_travel_weather",
+          type: "plugin" as const,
+          trigger: "at" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          toolName: "weather_query",
+          toolParams: { days: 1 }
+        },
+        {
+          id: "act_travel_notify",
+          type: "notify" as const,
+          trigger: "after" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          message: "出门前天气提醒：{{result}}"
+        }
+      ]
+    }
+  },
+  {
+    id: "simple_reminder",
+    name: "简单提醒",
+    description: "发送自定义提醒消息",
+    category: "提醒类",
+    template: {
+      title: "自定义提醒",
+      weekdays: [0, 1, 2, 3, 4, 5, 6],
+      time: "09:00",
+      actions: [
+        {
+          id: "act_simple_reminder",
+          type: "notify" as const,
+          trigger: "at" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          message: "这是一个自定义提醒，请修改消息内容"
+        }
+      ]
+    }
+  },
+  {
+    id: "scheduled_task",
+    name: "定时任务",
+    description: "执行AI任务并发送结果",
+    category: "提醒类",
+    template: {
+      title: "定时AI任务",
+      weekdays: [0, 1, 2, 3, 4, 5, 6],
+      time: "12:00",
+      actions: [
+        {
+          id: "act_scheduled_task",
+          type: "ai_task" as const,
+          trigger: "at" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          prompt: "执行定时任务，请修改具体的任务描述"
+        },
+        {
+          id: "act_task_notify",
+          type: "notify" as const,
+          trigger: "after" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          message: "{{result}}"
+        }
+      ]
+    }
+  }
+];
+
 interface RoutineAction {
   id: string;
   type: "notify" | "plugin" | "ai_task";
@@ -128,6 +300,11 @@ export function MembersPage() {
   const [aiParsing, setAiParsing] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
+  
+  // 编辑模式：natural（自然语言） | structured（结构化） | template（模板选择）
+  const [editMode, setEditMode] = useState<"natural" | "structured" | "template">("natural");
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
 
   // Routine preview
   const [showPreview, setShowPreview] = useState(false);
@@ -618,12 +795,33 @@ export function MembersPage() {
                     <h3 className="text-sm font-medium text-stone-500">
                       7 days · {detail.routines.length} 项习惯
                     </h3>
-                    <button
-                      onClick={() => { setShowAiInput(true); setAiDescription(""); setAiError(null); }}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
-                    >
-                      + 新增习惯
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setShowAiInput(true); setAiDescription(""); setAiError(null); }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
+                      >
+                        + 新增习惯
+                      </button>
+                      <button
+                        onClick={() => {
+                          const newRoutine: Routine = {
+                            id: `rtn_${Date.now().toString(36)}`,
+                            title: "新习惯",
+                            description: "",
+                            weekdays: [0, 1, 2, 3, 4, 5, 6],
+                            time: "09:00",
+                            reminders: [],
+                            actions: [],
+                          };
+                          setEditingRoutine(newRoutine);
+                          setEditMode("template");
+                          setSelectedTemplate(null);
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 transition-colors cursor-pointer"
+                      >
+                        📋 模板
+                      </button>
+                    </div>
                   </div>
 
                   {/* AI smart input */}
@@ -1558,9 +1756,139 @@ export function MembersPage() {
             <h3 className="text-lg font-semibold text-stone-800 mb-4">
               {detail?.routines.some((r) => r.id === editingRoutine.id) ? "编辑 7 days 习惯" : "新增 7 days 习惯"}
             </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">名称</label>
+            
+            {/* 模式切换器 */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-medium text-stone-600">配置方式</p>
+                <div className="flex rounded-lg bg-stone-100 p-1">
+                  <button
+                    onClick={() => setEditMode("template")}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                      editMode === "template"
+                        ? "bg-white text-amber-700 shadow-sm"
+                        : "text-stone-600 hover:text-stone-800"
+                    }`}
+                  >
+                    模板
+                  </button>
+                  <button
+                    onClick={() => setEditMode("natural")}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                      editMode === "natural"
+                        ? "bg-white text-amber-700 shadow-sm"
+                        : "text-stone-600 hover:text-stone-800"
+                    }`}
+                  >
+                    自然语言
+                  </button>
+                  <button
+                    onClick={() => setEditMode("structured")}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                      editMode === "structured"
+                        ? "bg-white text-amber-700 shadow-sm"
+                        : "text-stone-600 hover:text-stone-800"
+                    }`}
+                  >
+                    结构化
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-stone-500">
+                {editMode === "template" 
+                  ? "选择预设模板快速创建常用习惯"
+                  : editMode === "natural" 
+                  ? "用自然语言描述，AI 自动生成配置" 
+                  : "手动配置每个执行步骤和参数"
+                }
+              </p>
+            </div>
+            
+            {editMode === "template" ? (
+              // 模板选择模式
+              <div className="space-y-4">
+                <div className="grid gap-3">
+                  {Object.entries(
+                    SCENARIO_TEMPLATES.reduce((groups, template) => {
+                      const category = template.category;
+                      if (!groups[category]) groups[category] = [];
+                      groups[category].push(template);
+                      return groups;
+                    }, {} as Record<string, typeof SCENARIO_TEMPLATES>)
+                  ).map(([category, templates]) => (
+                    <div key={category}>
+                      <h4 className="text-sm font-medium text-stone-700 mb-2">{category}</h4>
+                      <div className="grid grid-cols-1 gap-2">
+                        {templates.map((template) => (
+                          <button
+                            key={template.id}
+                            onClick={() => {
+                              // 应用模板到当前编辑的习惯
+                              setEditingRoutine({
+                                ...editingRoutine,
+                                ...template.template,
+                                id: editingRoutine.id, // 保持原有ID
+                                description: editingRoutine.description, // 保持原有描述
+                              });
+                              setSelectedTemplate(template.id);
+                            }}
+                            className={`p-3 rounded-lg border text-left transition-colors ${
+                              selectedTemplate === template.id
+                                ? "border-amber-500 bg-amber-50"
+                                : "border-stone-200 hover:border-stone-300 hover:bg-stone-50"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <h5 className="text-sm font-medium text-stone-800">{template.name}</h5>
+                              {selectedTemplate === template.id && (
+                                <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
+                                  已选择
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-stone-500">{template.description}</p>
+                            <div className="flex items-center gap-2 mt-2">
+                              <span className="text-xs text-stone-400">
+                                {template.template.weekdays.map(d => WEEKDAY_NAMES[d]).join("、")}
+                              </span>
+                              {template.template.time && (
+                                <span className="text-xs text-stone-400">
+                                  {template.template.time}
+                                </span>
+                              )}
+                              <span className="text-xs text-stone-400">
+                                {template.template.actions?.length || 0}个步骤
+                              </span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {selectedTemplate && (
+                  <div className="p-4 rounded-lg border border-green-200 bg-green-50/30">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-medium text-green-800">模板已应用</h4>
+                      <button
+                        onClick={() => setEditMode("natural")}
+                        className="text-xs text-green-600 hover:text-green-700 font-medium"
+                      >
+                        继续编辑 →
+                      </button>
+                    </div>
+                    <p className="text-xs text-green-700">
+                      可以切换到其他模式进行个性化调整，或直接保存使用当前配置。
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : editMode === "natural" ? (
+              // 自然语言模式
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-1">名称</label>
                 <input
                   type="text"
                   value={editingRoutine.title}
@@ -1674,7 +2002,73 @@ export function MembersPage() {
                   <p className="text-[11px] text-stone-400 mt-1.5">通知会发送到微信，执行结果可在下方“最近执行记录”查看</p>
                 </div>
               )}
-            </div>
+              </div>
+            ) : (
+              // 结构化配置模式 - 简化版本，先实现基础功能
+              <div className="space-y-4">
+                {/* 基本信息 */}
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-1">名称</label>
+                  <input
+                    type="text"
+                    value={editingRoutine.title}
+                    onChange={(e) => setEditingRoutine({ ...editingRoutine, title: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-2">每周重复</label>
+                  <div className="flex gap-2">
+                    {[0, 1, 2, 3, 4, 5, 6].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => {
+                          const wds = editingRoutine.weekdays.includes(d)
+                            ? editingRoutine.weekdays.filter((x) => x !== d)
+                            : [...editingRoutine.weekdays, d].sort();
+                          setEditingRoutine({ ...editingRoutine, weekdays: wds });
+                        }}
+                        className={`w-9 h-9 rounded-full text-sm font-medium transition-colors ${
+                          editingRoutine.weekdays.includes(d)
+                            ? "bg-amber-500 text-white"
+                            : "bg-stone-100 text-stone-400 hover:bg-stone-200"
+                        }`}
+                      >
+                        {WEEKDAY_NAMES[d]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-stone-500 mb-1">具体时间</label>
+                  <input
+                    type="time"
+                    value={editingRoutine.time ?? ""}
+                    onChange={(e) => setEditingRoutine({ ...editingRoutine, time: e.target.value || undefined })}
+                    className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400 focus:bg-white transition-all [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                  />
+                </div>
+
+                {/* 简化的Actions配置 */}
+                <div className="p-4 rounded-lg border border-amber-200 bg-amber-50/30">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-sm font-medium text-stone-700">执行步骤配置</h4>
+                    <span className="text-xs text-amber-600 bg-amber-100 px-2 py-1 rounded-full">高级功能</span>
+                  </div>
+                  <p className="text-xs text-stone-600 mb-3">
+                    结构化配置模式正在完善中，当前推荐使用自然语言模式进行配置。
+                  </p>
+                  <button
+                    onClick={() => setEditMode("natural")}
+                    className="text-xs text-amber-600 hover:text-amber-700 font-medium"
+                  >
+                    切换到自然语言模式 →
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-end gap-3 mt-6">
               <button

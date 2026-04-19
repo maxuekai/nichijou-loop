@@ -20,6 +20,7 @@ export function createRoutineTools(
             properties: {
               id: { type: "string" },
               title: { type: "string" },
+              description: { type: "string" },
               weekdays: { type: "array", items: { type: "number" } },
               timeSlot: { type: "string", enum: ["morning", "afternoon", "evening"] },
               time: { type: "string", description: "精确时间如 18:30" },
@@ -32,6 +33,29 @@ export function createRoutineTools(
                     message: { type: "string" },
                     channel: { type: "string", enum: ["wechat", "dashboard", "both"] },
                   },
+                },
+              },
+              actions: {
+                type: "array",
+                description: "完整的动作配置数组，支持notify、plugin、ai_task类型",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    type: { type: "string", enum: ["notify", "plugin", "ai_task"] },
+                    trigger: { type: "string", enum: ["before", "at", "after"] },
+                    offsetMinutes: { type: "number" },
+                    channel: { type: "string", enum: ["wechat", "dashboard", "both"] },
+                    message: { type: "string", description: "通知消息内容（notify类型使用）" },
+                    toolName: { type: "string", description: "插件工具名称（plugin类型使用）" },
+                    toolParams: { 
+                      type: "object", 
+                      description: "插件工具参数（plugin类型使用）",
+                      additionalProperties: true 
+                    },
+                    prompt: { type: "string", description: "AI任务提示词（ai_task类型使用）" },
+                  },
+                  required: ["id", "type", "trigger"],
                 },
               },
             },
@@ -151,7 +175,57 @@ export function createRoutineTools(
       parameters: {
         type: "object",
         properties: {
-          routine: { type: "object" },
+          routine: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              title: { type: "string" },
+              description: { type: "string" },
+              assigneeMemberIds: { 
+                type: "array", 
+                items: { type: "string" },
+                description: "分配给的家庭成员ID列表"
+              },
+              weekdays: { type: "array", items: { type: "number" } },
+              timeSlot: { type: "string", enum: ["morning", "afternoon", "evening"] },
+              time: { type: "string", description: "精确时间如 18:30" },
+              reminders: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    offsetMinutes: { type: "number" },
+                    message: { type: "string" },
+                    channel: { type: "string", enum: ["wechat", "dashboard", "both"] },
+                  },
+                },
+              },
+              actions: {
+                type: "array",
+                description: "完整的动作配置数组，支持notify、plugin、ai_task类型",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    type: { type: "string", enum: ["notify", "plugin", "ai_task"] },
+                    trigger: { type: "string", enum: ["before", "at", "after"] },
+                    offsetMinutes: { type: "number" },
+                    channel: { type: "string", enum: ["wechat", "dashboard", "both"] },
+                    message: { type: "string", description: "通知消息内容（notify类型使用）" },
+                    toolName: { type: "string", description: "插件工具名称（plugin类型使用）" },
+                    toolParams: { 
+                      type: "object", 
+                      description: "插件工具参数（plugin类型使用）",
+                      additionalProperties: true 
+                    },
+                    prompt: { type: "string", description: "AI任务提示词（ai_task类型使用）" },
+                  },
+                  required: ["id", "type", "trigger"],
+                },
+              },
+            },
+            required: ["title", "weekdays"],
+          },
         },
         required: ["routine"],
       },

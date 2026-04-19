@@ -945,6 +945,44 @@ ${conversationText}
     return tool.execute(params);
   }
 
+  /**
+   * 测试习惯Action的执行（用于调试和验证）
+   */
+  async testRoutineAction(
+    memberId: string, 
+    routineId: string, 
+    actionId: string
+  ): Promise<{ success: boolean; result: string; errors?: string[] }> {
+    try {
+      // 获取习惯和action
+      const routine = this.routineEngine.getRoutines(memberId).find(r => r.id === routineId);
+      if (!routine) {
+        return {
+          success: false,
+          result: `习惯不存在: ${routineId}`
+        };
+      }
+
+      const action = routine.actions?.find(a => a.id === actionId);
+      if (!action) {
+        return {
+          success: false,
+          result: `Action不存在: ${actionId}`
+        };
+      }
+
+      // 使用ActionExecutor进行测试
+      return await this.actionExecutor.testAction(memberId, routine, action);
+
+    } catch (error) {
+      console.error(`[Butler] 测试Action失败:`, error);
+      return {
+        success: false,
+        result: `测试失败: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+  }
+
   /** 使用配置时区格式化当前时间，返回人类可读 + ISO 字符串 */
   private formatNow(): { display: string; iso: string } {
     const tz = this.config.get().timezone || "Asia/Shanghai";
@@ -2168,32 +2206,38 @@ ${conversationText}
 
           // 5. 智能插件匹配
           if (availableTools.length > 0) {
+            // 扩展关键词词典，支持更多变体和场景
             const toolPatterns: Record<string, string[]> = {
-              weather: ['天气', 'weather'],
-              news: ['新闻', 'news'],
-              fitness: ['健身', '运动', '锻炼', 'fitness'],
-              calendar: ['日程', '会议', 'calendar'],
-              finance: ['股价', '金融', 'stock', 'finance']
+              weather: ['天气', '气温', '温度', '降雨', '下雨', '晴天', '阴天', '多云', '刮风', '湿度', '穿衣', 'weather'],
+              news: ['新闻', '资讯', '热点', '头条', '事件', '周刊', '周报', '日报', '播报', '汇总', '摘要', 'news'],
+              fitness: ['健身', '运动', '锻炼', '训练', '跑步', '游泳', '瑜伽', 'fitness', 'workout'],
+              calendar: ['日程', '会议', '安排', '计划', '约会', '预约', 'calendar', 'schedule'],
+              finance: ['股价', '金融', '投资', '基金', '股票', 'stock', 'finance']
             };
 
             for (const tool of availableTools) {
               let matchScore = 0;
               const toolLower = tool.toLowerCase();
               
-              // 直接匹配
+              // 直接匹配（工具名包含在描述中）
               if (description.includes(toolLower)) {
                 matchScore += 0.8;
               }
 
-              // 模式匹配
+              // 模式匹配（基于工具类型和关键词）
               for (const [pattern, keywords] of Object.entries(toolPatterns)) {
                 if (toolLower.includes(pattern)) {
                   const keywordMatches = keywords.filter(kw => description.includes(kw)).length;
                   matchScore += keywordMatches * 0.25;
                 }
               }
+              
+              // 场景化匹配（特殊组合加分）
+              const scenarioBoost = this.calculateScenarioBoost(tool, description);
+              matchScore += scenarioBoost;
 
-              if (matchScore >= 0.4) {
+              // 降低匹配阈值以提高覆盖率
+              if (matchScore >= 0.3) {
                 recommendations.push({
                   actionType: "plugin",
                   reason: `智能匹配插件: ${tool} (匹配度: ${(matchScore * 100).toFixed(0)}%)`,
@@ -2336,10 +2380,16 @@ ${conversationText}
                 break;
                 
               case "plugin":
+                const toolName = rec.params?.toolName;
+                const baseParams = rec.params?.toolParams || {};
+                
+                // 应用智能参数推理
+                const inferredParams = this.inferToolParameters(toolName, originalDescription, baseParams);
+                
                 actions.push({
                   ...baseAction,
-                  toolName: rec.params?.toolName,
-                  toolParams: rec.params?.toolParams || {},
+                  toolName,
+                  toolParams: inferredParams,
                 });
                 break;
             }
@@ -2423,44 +2473,27 @@ ${conversationText}
       // 开始解析对话
       await parseSession.prompt(`请解析这个习惯描述：${description}`);
       
-      // 获取最终的Agent消息
+      // 获取所有消息以进行多源提取
       const messages = parseSession.getMessages();
-      const lastAssistantMessage = messages
-        .filter((msg: any) => msg.role === "assistant")
-        .pop();
-
-      if (lastAssistantMessage) {
-        // 尝试从最后的助手回复中提取JSON结果
-        try {
-          const jsonMatch = lastAssistantMessage.content.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            finalResult = JSON.parse(jsonMatch[0]);
-          }
-        } catch (parseError) {
-          console.warn("[HabitParsing] 无法从Agent回复中解析JSON，使用降级解析");
-        }
-      }
-
-      // 检查工具调用记录
-      const toolCalls = messages.filter((msg: any) => msg.role === "assistant" && msg.toolCalls);
-      for (const toolCall of toolCalls) {
-        if (toolCall.toolCalls) {
-          for (const call of toolCall.toolCalls) {
-            toolValidations.push(`调用了工具: ${call.function.name}`);
-          }
-        }
-      }
-
-      // 如果Agent解析失败，降级到原始方法
+      
+      // 方法1: 优先从generate_routine_structure工具的返回值中提取完整结构
+      finalResult = this.extractFromToolResults(messages, toolValidations);
+      
+      // 方法2: 如果工具结果无效，从最后的assistant消息中提取
       if (!finalResult) {
-        console.warn("[HabitParsing] Agent解析失败，使用降级方法");
-        return this.parseRoutineDescriptionFallback(memberId, description);
+        finalResult = this.extractFromAssistantMessage(messages);
+      }
+
+      // 方法3: 如果以上都失败，启动多层降级机制
+      if (!finalResult) {
+        console.warn("[HabitParsing] Agent解析失败，启动多层降级机制");
+        return this.parseRoutineDescriptionWithMultiLayerFallback(memberId, description, "agent_failed");
       }
 
     } catch (error) {
       console.error("[HabitParsing] Agent解析过程出错", error);
-      warnings.push("AI解析过程出现错误，使用基础解析模式");
-      return this.parseRoutineDescriptionFallback(memberId, description);
+      warnings.push("AI解析过程出现错误，启动降级模式");
+      return this.parseRoutineDescriptionWithMultiLayerFallback(memberId, description, "agent_error");
     }
 
     // 处理解析结果
@@ -2544,6 +2577,210 @@ ${conversationText}
     }
 
     return { routine, warnings };
+  }
+
+  /**
+   * 从工具调用结果中提取JSON结构（优先级最高）
+   */
+  private extractFromToolResults(messages: any[], toolValidations: string[]): any {
+    try {
+      // 查找所有工具调用及其结果
+      for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        
+        // 检查是否是assistant消息且包含工具调用
+        if (message.role === "assistant" && message.toolCalls) {
+          for (const toolCall of message.toolCalls) {
+            toolValidations.push(`调用了工具: ${toolCall.function.name}`);
+            
+            // 查找对应的工具结果
+            const toolResultMessage = messages[i + 1];
+            if (toolResultMessage && 
+                toolResultMessage.role === "tool" && 
+                toolCall.function.name === "generate_routine_structure") {
+              
+              // 从工具结果中提取JSON
+              try {
+                const toolResult = JSON.parse(toolResultMessage.content);
+                console.log("[HabitParsing] 成功从generate_routine_structure工具结果中提取JSON");
+                return toolResult;
+              } catch (parseError) {
+                console.warn("[HabitParsing] 工具结果JSON解析失败", parseError);
+              }
+            }
+          }
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error("[HabitParsing] 从工具结果提取JSON时出错", error);
+      return null;
+    }
+  }
+
+  /**
+   * 从最后的assistant消息中提取JSON结构（次优先级）
+   */
+  private extractFromAssistantMessage(messages: any[]): any {
+    try {
+      const lastAssistantMessage = messages
+        .filter((msg: any) => msg.role === "assistant")
+        .pop();
+
+      if (lastAssistantMessage?.content) {
+        const jsonMatch = lastAssistantMessage.content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const result = JSON.parse(jsonMatch[0]);
+          console.log("[HabitParsing] 成功从assistant消息中提取JSON");
+          return result;
+        }
+      }
+      
+      return null;
+    } catch (parseError) {
+      console.warn("[HabitParsing] 从assistant消息提取JSON失败", parseError);
+      return null;
+    }
+  }
+
+  /**
+   * 智能参数推理框架：根据工具名称和用户描述推理最佳参数
+   */
+  private inferToolParameters(toolName: string | undefined, description: string, baseParams: Record<string, any>): Record<string, any> {
+    if (!toolName) return baseParams;
+    
+    const inferredParams = { ...baseParams };
+    const descLower = description.toLowerCase();
+    
+    try {
+      // 新闻工具参数推理
+      if (toolName === "news_fetch") {
+        // 模式推理
+        if (!inferredParams.mode) {
+          if (descLower.includes("周刊") || descLower.includes("周报") || descLower.includes("一周")) {
+            inferredParams.mode = "weekly";
+          } else if (descLower.includes("今日") || descLower.includes("今天")) {
+            inferredParams.mode = "daily";
+            inferredParams.date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+          } else {
+            inferredParams.mode = "latest";
+          }
+        }
+        
+        // 数量推理
+        if (!inferredParams.limit) {
+          if (descLower.includes("简要") || descLower.includes("摘要")) {
+            inferredParams.limit = 5;
+          } else if (descLower.includes("详细") || descLower.includes("完整")) {
+            inferredParams.limit = 15;
+          } else {
+            inferredParams.limit = 10;
+          }
+        }
+        
+        // 类别推理
+        if (!inferredParams.category) {
+          if (descLower.includes("科技") || descLower.includes("技术")) {
+            inferredParams.category = "tech";
+          } else if (descLower.includes("娱乐") || descLower.includes("影视")) {
+            inferredParams.category = "entertainment";
+          } else {
+            inferredParams.category = "all";
+          }
+        }
+      }
+      
+      // 天气工具参数推理
+      else if (toolName === "weather_query") {
+        // 自动注入家庭位置（如果没有指定city参数）
+        if (!inferredParams.city) {
+          const family = this.familyManager.getFamily();
+          if (family?.homeCity) {
+            inferredParams.city = family.homeCity;
+          } else if (family?.homeAdcode) {
+            // 如果有adcode，也可以使用
+            inferredParams.adcode = family.homeAdcode;
+          }
+        }
+        
+        // 天数推理
+        if (!inferredParams.days) {
+          if (descLower.includes("明天") || descLower.includes("明日")) {
+            inferredParams.days = 2; // 今天+明天
+          } else if (descLower.includes("三天") || descLower.includes("3天")) {
+            inferredParams.days = 3;
+          } else if (descLower.includes("一周") || descLower.includes("7天")) {
+            inferredParams.days = 7;
+          } else {
+            inferredParams.days = 1; // 默认今天
+          }
+        }
+      }
+      
+      console.log(`[ParamInference] 工具 ${toolName} 参数推理结果:`, {
+        original: baseParams,
+        inferred: inferredParams,
+        description: description.slice(0, 50) + "..."
+      });
+      
+    } catch (error) {
+      console.error(`[ParamInference] 工具 ${toolName} 参数推理出错:`, error);
+      return baseParams; // 出错时返回原始参数
+    }
+    
+    return inferredParams;
+  }
+
+  /**
+   * 注册新的参数推理规则（扩展点）
+   */
+  private registerParameterInferenceRule(toolName: string, rule: (description: string, params: Record<string, any>) => Record<string, any>): void {
+    // 预留扩展点，未来可以通过插件系统注册自定义推理规则
+    console.log(`[ParamInference] 注册参数推理规则: ${toolName}`);
+  }
+
+  /**
+   * 计算场景化匹配加分，处理特殊词汇组合
+   */
+  private calculateScenarioBoost(tool: string, description: string): number {
+    let boost = 0;
+    const toolLower = tool.toLowerCase();
+    const descLower = description.toLowerCase();
+    
+    // 新闻工具特殊场景
+    if (toolLower.includes('news')) {
+      // 时间维度加分
+      if (descLower.includes('周刊') || (descLower.includes('每周') && descLower.includes('新闻'))) {
+        boost += 0.3; // 强烈匹配"新闻周刊"
+      }
+      if (descLower.includes('播报') && descLower.includes('新闻')) {
+        boost += 0.25; // 匹配"播报新闻"
+      }
+      if (descLower.includes('汇总') || descLower.includes('摘要')) {
+        boost += 0.2; // 匹配"新闻汇总"
+      }
+    }
+    
+    // 天气工具特殊场景
+    else if (toolLower.includes('weather')) {
+      if (descLower.includes('播报') && descLower.includes('天气')) {
+        boost += 0.25; // 匹配"播报天气"
+      }
+      if (descLower.includes('明天') || descLower.includes('今天')) {
+        boost += 0.2; // 时间明确的天气查询
+      }
+      if (descLower.includes('出门') || descLower.includes('穿衣')) {
+        boost += 0.15; // 生活场景相关
+      }
+    }
+    
+    // 多工具组合场景
+    if (descLower.includes('天气') && descLower.includes('新闻')) {
+      boost += 0.1; // 复合需求轻微加分
+    }
+    
+    return Math.min(boost, 0.4); // 限制最大加分值
   }
 
   /**
@@ -2744,6 +2981,379 @@ ${conversationText}
     
     // 4. 默认情况：有动作但不确定用户意图时，保守添加notify
     return true;
+  }
+
+  /**
+   * 多层降级解析方法
+   */
+  private async parseRoutineDescriptionWithMultiLayerFallback(
+    memberId: string, 
+    description: string, 
+    reason: string
+  ): Promise<{ routine: Routine; warnings: string[] }> {
+    console.log(`[MultiLayerFallback] 开始降级解析，原因: ${reason}`);
+    
+    // 第1层：简化Agent解析（减少工具数量，降低复杂度）
+    try {
+      console.log("[MultiLayerFallback] 尝试第1层：简化Agent解析");
+      const simpleResult = await this.parseWithSimplifiedAgent(memberId, description);
+      if (simpleResult) {
+        console.log("[MultiLayerFallback] 第1层成功");
+        return { ...simpleResult, warnings: [...(simpleResult.warnings || []), "使用了简化解析模式"] };
+      }
+    } catch (error) {
+      console.warn("[MultiLayerFallback] 第1层失败:", error);
+    }
+    
+    // 第2层：规则解析（基于关键词和模式匹配）
+    try {
+      console.log("[MultiLayerFallback] 尝试第2层：规则解析");
+      const ruleResult = await this.parseWithRules(memberId, description);
+      if (ruleResult) {
+        console.log("[MultiLayerFallback] 第2层成功");
+        return { ...ruleResult, warnings: [...(ruleResult.warnings || []), "使用了规则解析模式"] };
+      }
+    } catch (error) {
+      console.warn("[MultiLayerFallback] 第2层失败:", error);
+    }
+    
+    // 第3层：纯通知模式（最后兜底）
+    console.log("[MultiLayerFallback] 使用第3层：纯通知模式");
+    return this.parseWithNotificationOnly(memberId, description);
+  }
+
+  /**
+   * 第1层：简化Agent解析（减少工具复杂度）
+   */
+  private async parseWithSimplifiedAgent(memberId: string, description: string): Promise<{ routine: Routine; warnings: string[] } | null> {
+    try {
+      const member = this.familyManager.getMember(memberId);
+      const { display, iso } = this.formatNow();
+      
+      // 只使用核心解析工具，去掉复杂的插件验证
+      const simplifiedTools = [
+        {
+          name: "parse_simple_routine",
+          description: "解析用户的习惯描述为结构化格式",
+          parameters: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "习惯名称" },
+              weekdays: { type: "array", items: { type: "number" }, description: "重复周期，0=周日" },
+              time: { type: "string", description: "执行时间，HH:MM格式" },
+              actionType: { 
+                type: "string", 
+                enum: ["notify_only", "ai_task", "plugin"],
+                description: "动作类型：notify_only=仅通知，ai_task=AI任务，plugin=插件工具" 
+              },
+              content: { type: "string", description: "具体内容或任务描述" },
+              toolHint: { type: "string", description: "如果需要插件，建议的工具名称" },
+            },
+            required: ["title", "weekdays", "actionType", "content"],
+          },
+          execute: async (params: any) => {
+            const result = {
+              title: params.title as string,
+              weekdays: params.weekdays as number[],
+              time: params.time as string | undefined,
+              actionType: params.actionType as string,
+              content: params.content as string,
+              toolHint: params.toolHint as string | undefined,
+            };
+            return { content: JSON.stringify(result, null, 2) };
+          },
+        },
+      ];
+      
+      const simpleSession = createAgentSession({
+        provider: this.getProvider(),
+        systemPrompt: [
+          "你是习惯解析助手。将用户的自然语言描述转为结构化格式。",
+          `当前时间: ${display}`,
+          member ? `当前成员: ${member.name}` : "",
+          "",
+          "# 任务",
+          "使用parse_simple_routine工具解析用户描述",
+          "",
+          "# 动作类型选择",
+          "- notify_only: 仅发送提醒通知",
+          "- ai_task: 需要AI执行任务（如查询天气、新闻等）", 
+          "- plugin: 需要调用特定工具（如news_fetch、weather_query）",
+        ].join("\n"),
+        tools: simplifiedTools,
+        maxTurns: 3,
+      });
+      
+      await simpleSession.prompt(`解析这个习惯：${description}`);
+      
+      // 提取工具调用结果
+      const messages = simpleSession.getMessages();
+      for (const message of messages) {
+        if (message.role === "tool" && message.content) {
+          try {
+            const parsed = JSON.parse(message.content);
+            return this.convertSimplifiedResult(parsed, description);
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error("[SimpleAgent] 解析失败:", error);
+      return null;
+    }
+  }
+
+  /**
+   * 第2层：规则解析（基于关键词匹配）
+   */
+  private async parseWithRules(memberId: string, description: string): Promise<{ routine: Routine; warnings: string[] } | null> {
+    try {
+      const warnings: string[] = [];
+      const desc = description.toLowerCase();
+      
+      // 提取标题（取前50个字符作为标题）
+      const title = description.slice(0, 50).trim() || "自定义习惯";
+      
+      // 解析时间
+      let time: string | undefined;
+      let weekdays: number[] = [];
+      
+      // 时间匹配
+      const timePatterns = [
+        /(\d{1,2})[点时](\d{1,2})?分?/g,
+        /(\d{1,2}):(\d{2})/g,
+        /早上(\d{1,2})[点时]/g,
+        /下午(\d{1,2})[点时]/g,
+        /晚上(\d{1,2})[点时]/g,
+      ];
+      
+      for (const pattern of timePatterns) {
+        const match = pattern.exec(desc);
+        if (match) {
+          let hour = parseInt(match[1]);
+          const minute = match[2] ? parseInt(match[2]) : 0;
+          
+          // 处理上午/下午/晚上
+          if (desc.includes("下午") && hour < 12) hour += 12;
+          if (desc.includes("晚上") && hour < 12) hour += 12;
+          
+          if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+            time = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+            break;
+          }
+        }
+      }
+      
+      // 周期匹配
+      const weekdayPatterns = {
+        '周日': 0, '周一': 1, '周二': 2, '周三': 3, '周四': 4, '周五': 5, '周六': 6,
+        '星期日': 0, '星期一': 1, '星期二': 2, '星期三': 3, '星期四': 4, '星期五': 5, '星期六': 6,
+      };
+      
+      for (const [pattern, day] of Object.entries(weekdayPatterns)) {
+        if (desc.includes(pattern)) {
+          weekdays.push(day);
+        }
+      }
+      
+      // 如果没有明确指定，根据关键词推断
+      if (weekdays.length === 0) {
+        if (desc.includes("每天") || desc.includes("天天")) {
+          weekdays = [0, 1, 2, 3, 4, 5, 6];
+        } else if (desc.includes("工作日")) {
+          weekdays = [1, 2, 3, 4, 5];
+        } else if (desc.includes("周末")) {
+          weekdays = [0, 6];
+        } else {
+          weekdays = [0, 1, 2, 3, 4, 5, 6]; // 默认每天
+        }
+      }
+      
+      // 检测动作类型和内容
+      const actionKeywords = {
+        news: ['新闻', '资讯', '头条', '周刊'],
+        weather: ['天气', '气温', '穿衣'],
+        general: ['提醒', '通知', '告诉'],
+      };
+      
+      let actionType = 'notify';
+      let content = title;
+      let toolName: string | undefined;
+      
+      if (actionKeywords.news.some(kw => desc.includes(kw))) {
+        actionType = 'ai_task';
+        content = '获取新闻资讯';
+        toolName = 'news_fetch';
+      } else if (actionKeywords.weather.some(kw => desc.includes(kw))) {
+        actionType = 'ai_task';
+        content = '获取天气信息';
+        toolName = 'weather_query';
+      }
+      
+      // 构建动作
+      const actions: any[] = [];
+      
+      if (actionType === 'ai_task') {
+        actions.push({
+          id: `act_${Date.now().toString(36)}`,
+          type: 'ai_task',
+          trigger: 'at',
+          offsetMinutes: 0,
+          prompt: content,
+          channel: 'wechat',
+        });
+        
+        actions.push({
+          id: `act_${Date.now().toString(36)}_notify`,
+          type: 'notify',
+          trigger: 'after', 
+          offsetMinutes: 0,
+          message: '{{result}}',
+          channel: 'wechat',
+        });
+      } else {
+        actions.push({
+          id: `act_${Date.now().toString(36)}`,
+          type: 'notify',
+          trigger: 'at',
+          offsetMinutes: 0,
+          message: content,
+          channel: 'wechat',
+        });
+      }
+      
+      const routine: Routine = {
+        id: `rtn_${Date.now().toString(36)}`,
+        title,
+        description,
+        weekdays,
+        time,
+        reminders: [],
+        actions,
+      };
+      
+      warnings.push("使用了关键词匹配解析，建议检查时间和执行内容是否正确");
+      
+      return { routine, warnings };
+    } catch (error) {
+      console.error("[RuleParser] 解析失败:", error);
+      return null;
+    }
+  }
+
+  /**
+   * 第3层：纯通知模式（最后兜底）
+   */
+  private parseWithNotificationOnly(memberId: string, description: string): { routine: Routine; warnings: string[] } {
+    const title = description.slice(0, 50).trim() || "自定义提醒";
+    
+    const routine: Routine = {
+      id: `rtn_${Date.now().toString(36)}`,
+      title,
+      description,
+      weekdays: [0, 1, 2, 3, 4, 5, 6], // 默认每天
+      time: "09:00", // 默认上午9点
+      reminders: [],
+      actions: [{
+        id: `act_${Date.now().toString(36)}`,
+        type: "notify",
+        trigger: "at",
+        offsetMinutes: 0,
+        message: title,
+        channel: "wechat",
+      }],
+    };
+    
+    const warnings = [
+      "所有智能解析都失败了，已创建基础通知提醒",
+      "请手动检查并调整时间、周期和内容",
+      "如需复杂功能，请切换到结构化配置模式"
+    ];
+    
+    return { routine, warnings };
+  }
+
+  /**
+   * 转换简化解析结果为完整格式
+   */
+  private convertSimplifiedResult(parsed: any, description: string): { routine: Routine; warnings: string[] } {
+    const warnings: string[] = [];
+    const actions: any[] = [];
+    
+    const baseAction = {
+      id: `act_${Date.now().toString(36)}`,
+      trigger: "at" as const,
+      offsetMinutes: 0,
+      channel: "wechat" as const,
+    };
+    
+    switch (parsed.actionType) {
+      case "notify_only":
+        actions.push({
+          ...baseAction,
+          type: "notify",
+          message: parsed.content,
+        });
+        break;
+        
+      case "ai_task":
+        actions.push({
+          ...baseAction,
+          type: "ai_task",
+          prompt: parsed.content,
+        });
+        actions.push({
+          id: `act_${Date.now().toString(36)}_notify`,
+          type: "notify",
+          trigger: "after" as const,
+          offsetMinutes: 0,
+          channel: "wechat" as const,
+          message: "{{result}}",
+        });
+        break;
+        
+      case "plugin":
+        if (parsed.toolHint) {
+          const toolParams = this.inferToolParameters(parsed.toolHint, description, {});
+          actions.push({
+            ...baseAction,
+            type: "plugin",
+            toolName: parsed.toolHint,
+            toolParams,
+          });
+          actions.push({
+            id: `act_${Date.now().toString(36)}_notify`,
+            type: "notify", 
+            trigger: "after" as const,
+            offsetMinutes: 0,
+            channel: "wechat" as const,
+            message: "{{result}}",
+          });
+        } else {
+          warnings.push("未找到合适的插件工具，已改为AI任务模式");
+          actions.push({
+            ...baseAction,
+            type: "ai_task",
+            prompt: parsed.content,
+          });
+        }
+        break;
+    }
+    
+    const routine: Routine = {
+      id: `rtn_${Date.now().toString(36)}`,
+      title: parsed.title || description.slice(0, 50),
+      description,
+      weekdays: parsed.weekdays || [0, 1, 2, 3, 4, 5, 6],
+      time: parsed.time,
+      reminders: [],
+      actions,
+    };
+    
+    return { routine, warnings };
   }
 
   /**
