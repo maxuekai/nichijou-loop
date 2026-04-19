@@ -1,3 +1,5 @@
+import type { ConversationLogWithMedia } from "@nichijou/shared";
+
 const BASE = "/api";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -147,6 +149,30 @@ export const api = {
       nodeVersion: string;
       pid: number;
     }>("/system-info"),
+
+  getLogs: () =>
+    request<{ logs: ConversationLogWithMedia[] }>("/logs"),
+
+  getMediaFile: (filePath: string) => `${BASE}/media/${encodeURIComponent(filePath)}`,
+
+  getThumbnail: (filePath: string, size: "small" | "medium" | "large" = "medium") =>
+    `${BASE}/media/${encodeURIComponent(filePath)}/thumbnail?size=${size}`,
+
+  downloadMedia: async (filePath: string, filename?: string): Promise<void> => {
+    const response = await fetch(`${BASE}/media/${encodeURIComponent(filePath)}`);
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+    }
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename || filePath.split("/").pop() || "download";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  },
 
   getWeather: () =>
     request<{ temp: number | null; tempMax: number | null; tempMin: number | null; weatherCode: number; description: string; location: string }>("/board/weather"),

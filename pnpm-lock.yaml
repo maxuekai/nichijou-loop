@@ -128,6 +128,9 @@ importers:
       '@heroicons/react':
         specifier: ^2.2.0
         version: 2.2.0(react@19.2.5)
+      '@nichijou/shared':
+        specifier: workspace:*
+        version: link:../shared
       lunar-javascript:
         specifier: ^1.7.7
         version: 1.7.7
