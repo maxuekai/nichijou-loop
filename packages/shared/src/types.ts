@@ -37,9 +37,12 @@ export interface MediaItem {
   fileName?: string;
 }
 
+/** Download lifecycle for persisted logs and pipeline consumers */
+export type MediaDownloadStatus = "completed" | "failed" | "processing";
+
 /** Enhanced media content with metadata */
 export interface MediaContent {
-  type: 'image' | 'voice' | 'file' | 'video';
+  type: "image" | "voice" | "file" | "video";
   filePath: string;
   originalName?: string;
   mimeType?: string;
@@ -47,6 +50,8 @@ export interface MediaContent {
   duration?: number; // 语音/视频时长(秒)
   hash?: string; // 文件哈希，用于去重
   downloadedAt?: string; // 下载时间戳
+  /** Set when tracking download/persist state; omitted for legacy in-flight payloads */
+  downloadStatus?: MediaDownloadStatus;
 }
 
 /** Reference/reply message content */
@@ -261,4 +266,30 @@ export interface ChannelStatus {
   expiredMembers?: string[];
   onlineSince?: string;
   lastError?: string;
+}
+
+/** Conversation log row (admin dashboard / HTTP API shape) */
+export interface ConversationLog {
+  id: number;
+  memberId: string;
+  memberName: string;
+  userInput: string;
+  finalReply: string;
+  events: string;
+  createdAt: string;
+}
+
+/** Transcription / vision / thumbnail sidecar results tied to a log entry */
+export interface ProcessedMediaInfo {
+  mediaId: string;
+  processType: "transcription" | "analysis" | "thumbnail";
+  result: string;
+  success: boolean;
+  error?: string;
+}
+
+/** Conversation log with optional multimedia attachments and processing metadata */
+export interface ConversationLogWithMedia extends ConversationLog {
+  mediaContent?: MediaContent[];
+  processedMedia?: ProcessedMediaInfo[];
 }
