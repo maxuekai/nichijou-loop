@@ -1,19 +1,19 @@
-import type { NewsAPIResponse, NewsArticle, NewsFetchParams, CacheEntry } from "./types.js";
+import type { NewsAPIResponse, NewsArticle, NewsFetchParams, CacheEntry, RSSFeed } from "./types.js";
 
-// 中文RSS新闻源配置（包含科技、娱乐、文化等各类源）
-const availableRSSFeeds = [
+// 中文RSS新闻源配置（按类型分类）
+const availableRSSFeeds: RSSFeed[] = [
   // 科技新闻
-  { name: "IT之家", url: "https://www.ithome.com/rss/" },
-  { name: "36氪", url: "https://36kr.com/feed" },
-  { name: "少数派", url: "https://sspai.com/feed" },
-  { name: "爱范儿", url: "https://www.ifanr.com/feed" },
+  { name: "IT之家", url: "https://www.ithome.com/rss/", category: "tech" },
+  { name: "36氪", url: "https://36kr.com/feed", category: "tech" },
+  { name: "少数派", url: "https://sspai.com/feed", category: "tech" },
+  { name: "爱范儿", url: "https://www.ifanr.com/feed", category: "tech" },
   
   // 综合新闻
-  { name: "网易新闻", url: "http://news.163.com/special/00011K6L/rss_newstop.xml" },
+  { name: "网易新闻", url: "http://news.163.com/special/00011K6L/rss_newstop.xml", category: "general" },
   
   // 娱乐文化
-  { name: "豆瓣影评", url: "https://www.douban.com/feed/review/movie" },
-  { name: "知乎日报", url: "https://feeds.feedburner.com/zhihu-daily" }
+  { name: "豆瓣影评", url: "https://www.douban.com/feed/review/movie", category: "entertainment" },
+  { name: "知乎日报", url: "https://feeds.feedburner.com/zhihu-daily", category: "entertainment" }
 ];
 
 // 内存缓存
@@ -49,9 +49,17 @@ type RSSFeedResult = {
   feedName: string;
 };
 
-// 从RSS获取中文新闻（简化版，不再分类）
+// 从RSS获取中文新闻（支持按类型筛选）
 async function fetchChineseNewsFromRSS(params: NewsFetchParams, config: Record<string, unknown> = {}): Promise<NewsAPIResponse> {
-  const enabledFeeds = availableRSSFeeds;
+  const category = params.category || "all";
+  
+  // 根据类型筛选RSS源
+  let enabledFeeds: RSSFeed[];
+  if (category === "all") {
+    enabledFeeds = availableRSSFeeds;
+  } else {
+    enabledFeeds = availableRSSFeeds.filter(feed => feed.category === category);
+  }
   
   if (enabledFeeds.length === 0) {
     console.warn('没有可用的RSS源');
@@ -165,6 +173,7 @@ async function fetchChineseNewsFromRSS(params: NewsFetchParams, config: Record<s
 function getCacheKey(params: NewsFetchParams): string {
   return JSON.stringify({
     limit: params.limit || 5,
+    category: params.category || "all",
   });
 }
 

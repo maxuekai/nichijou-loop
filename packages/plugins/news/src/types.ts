@@ -49,9 +49,10 @@ export interface NewsPluginConfig {
   githubCacheMinutes?: number;
 }
 
-// 工具参数类型（简化版）
+// 工具参数类型（增加分类支持）
 export interface NewsFetchParams {
   limit?: number;
+  category?: "tech" | "entertainment" | "general" | "all";
 }
 
 export interface GitHubProjectsParams {
@@ -63,6 +64,13 @@ export interface GitHubProjectsParams {
 }
 
 // NewsDetailParams 已删除 - 不再需要新闻详情功能
+
+// RSS源类型定义
+export interface RSSFeed {
+  name: string;
+  url: string;
+  category: "tech" | "entertainment" | "general";
+}
 
 // 缓存类型
 export interface CacheEntry<T> {

@@ -20,7 +20,7 @@ export default definePlugin({
   id: "news",
   name: "新闻助手", 
   description: "获取最新中文新闻、娱乐文化资讯和 GitHub 热门 AI 项目信息，涵盖科技、影视、热点等多元内容",
-  version: "0.1.1",
+  version: "0.1.2",
 
   configSchema: {
     githubHotness: {
@@ -59,8 +59,8 @@ export default definePlugin({
     {
       name: "news_fetch", 
       description:
-        "获取最新中文新闻和娱乐资讯。包含科技新闻（IT之家、36氪、少数派、爱范儿）、" +
-        "综合新闻（网易新闻）、娱乐文化（豆瓣影评、知乎日报），完全免费，内容丰富多元。",
+        "获取最新中文新闻和娱乐资讯，支持按类型筛选。科技类：IT之家、36氪、少数派、爱范儿；" +
+        "综合类：网易新闻；娱乐类：豆瓣影评、知乎日报。可指定category参数获取特定类型新闻。",
       parameters: {
         type: "object",
         properties: {
@@ -69,6 +69,12 @@ export default definePlugin({
             description: "返回新闻数量，默认 5",
             minimum: 1,
             maximum: 20,
+          },
+          category: {
+            type: "string",
+            description: "新闻类型: tech(科技)、entertainment(娱乐)、general(综合)、all(全部)",
+            enum: ["tech", "entertainment", "general", "all"],
+            default: "all",
           },
         },
         required: [],
