@@ -18,7 +18,7 @@
     "build": "tsc -b",
     "dev": "tsc -b --watch",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js dev"
   },
   "dependencies": {
     "@nichijou/agent": "workspace:*",

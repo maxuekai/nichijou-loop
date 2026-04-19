@@ -135,7 +135,7 @@ export function LogsPage() {
             onChange={(e) => setFilterMember(e.target.value)}
             className="px-3 py-2 rounded-lg border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20"
           >
-            <option value="all">全部成员 ({filtered.length})</option>
+            <option value="all">全部成员 ({logs.length})</option>
             {memberNames.map((name) => (
               <option key={name} value={name}>
                 {name} ({logs.filter(l => l.memberName === name).length})

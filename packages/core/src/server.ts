@@ -343,9 +343,10 @@ export class NichijouServer {
         return;
       }
 
-      if (path.startsWith("/api/media/") && method === "GET") {
+      if (path.startsWith("/api/media/") && (method === "GET" || method === "HEAD")) {
         const mediaRoot = pathResolve(this.butler.storage.resolve("media"));
         const tail = path.slice("/api/media/".length);
+        const isHead = method === "HEAD";
 
         if (tail.endsWith("/thumbnail")) {
           const relative = decodeURIComponent(tail.slice(0, -"/thumbnail".length).replace(/\+/g, " "));
@@ -378,7 +379,11 @@ export class NichijouServer {
               "Content-Length": String(thumbnail.length),
               "Cache-Control": "public, max-age=86400",
             });
-            res.end(thumbnail);
+            if (isHead) {
+              res.end();
+            } else {
+              res.end(thumbnail);
+            }
           } catch (err) {
             const code = err && typeof err === "object" && "code" in err ? (err as NodeJS.ErrnoException).code : undefined;
             if (code === "ENOENT") {
@@ -410,6 +415,10 @@ export class NichijouServer {
             "Content-Length": String(stats.size),
             "Cache-Control": "public, max-age=3600",
           });
+          if (isHead) {
+            res.end();
+            return;
+          }
           const stream = createReadStream(resolvedPath);
           stream.on("error", (streamErr) => {
             console.error("[Server] Media stream error:", streamErr);
