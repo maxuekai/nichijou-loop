@@ -18,9 +18,9 @@ setInterval(() => {
 
 export default definePlugin({
   id: "news",
-  name: "新闻助手",
-  description: "获取最新中文新闻和 GitHub 热门 AI 项目信息，基于稳定的RSS源",
-  version: "0.1.0",
+  name: "新闻助手", 
+  description: "获取最新中文新闻、娱乐文化资讯和 GitHub 热门 AI 项目信息，涵盖科技、影视、热点等多元内容",
+  version: "0.1.1",
 
   configSchema: {
     githubHotness: {
@@ -57,10 +57,10 @@ export default definePlugin({
 
   tools: [
     {
-      name: "news_fetch",
+      name: "news_fetch", 
       description:
-        "获取最新中文新闻摘要。基于稳定的RSS新闻源（IT之家、36氪、少数派、网易新闻），" +
-        "完全免费，返回格式化的新闻内容。",
+        "获取最新中文新闻和娱乐资讯。包含科技新闻（IT之家、36氪、少数派、爱范儿）、" +
+        "综合新闻（网易新闻）、娱乐文化（豆瓣影评、知乎日报），完全免费，内容丰富多元。",
       parameters: {
         type: "object",
         properties: {

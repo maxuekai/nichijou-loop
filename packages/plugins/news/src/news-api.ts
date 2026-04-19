@@ -1,11 +1,19 @@
 import type { NewsAPIResponse, NewsArticle, NewsFetchParams, CacheEntry } from "./types.js";
 
-// 中文RSS新闻源配置（所有可用源，不再分类）
+// 中文RSS新闻源配置（包含科技、娱乐、文化等各类源）
 const availableRSSFeeds = [
+  // 科技新闻
   { name: "IT之家", url: "https://www.ithome.com/rss/" },
   { name: "36氪", url: "https://36kr.com/feed" },
   { name: "少数派", url: "https://sspai.com/feed" },
-  { name: "网易新闻", url: "http://news.163.com/special/00011K6L/rss_newstop.xml" }
+  { name: "爱范儿", url: "https://www.ifanr.com/feed" },
+  
+  // 综合新闻
+  { name: "网易新闻", url: "http://news.163.com/special/00011K6L/rss_newstop.xml" },
+  
+  // 娱乐文化
+  { name: "豆瓣影评", url: "https://www.douban.com/feed/review/movie" },
+  { name: "知乎日报", url: "https://feeds.feedburner.com/zhihu-daily" }
 ];
 
 // 内存缓存
