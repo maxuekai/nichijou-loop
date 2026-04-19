@@ -16,6 +16,7 @@ import type {
   RoutineAction, 
   Plan,
   MediaContent,
+  ProcessedMediaInfo,
   ReferenceContent,
   ThreadContext
 } from "@nichijou/shared";
@@ -1352,9 +1353,13 @@ ${conversationText}
   /**
    * 构建包含多媒体和引用上下文的增强消息
    */
-  private async buildEnhancedMessage(msg: InboundMessage, member: FamilyMember): Promise<string> {
+  private async buildEnhancedMessage(
+    msg: InboundMessage,
+    member: FamilyMember,
+  ): Promise<{ message: string; processedMedia: ProcessedMediaInfo[] }> {
     const { display, iso } = this.formatNow();
     let enhancedMessage = `[系统时间更新: ${display}, ISO: ${iso}]\n\n`;
+    const processedMedia: ProcessedMediaInfo[] = [];
 
     // 处理引用消息上下文
     if (msg.references && msg.references.length > 0) {
@@ -1364,7 +1369,8 @@ ${conversationText}
 
     // 处理媒体内容
     if (msg.mediaContent && msg.mediaContent.length > 0) {
-      const mediaContext = await this.buildMediaContext(msg.mediaContent);
+      const { context: mediaContext, processedMedia: fromMedia } = await this.buildMediaContext(msg.mediaContent);
+      processedMedia.push(...fromMedia);
       if (mediaContext) {
         enhancedMessage += mediaContext + '\n\n';
       }
@@ -1373,7 +1379,7 @@ ${conversationText}
     // 添加用户文本消息
     enhancedMessage += msg.text;
 
-    return enhancedMessage;
+    return { message: enhancedMessage, processedMedia };
   }
 
   /**
@@ -1438,10 +1444,16 @@ ${conversationText}
   /**
    * 构建媒体内容的上下文描述
    */
-  private async buildMediaContext(mediaContent: MediaContent[]): Promise<string> {
+  private async buildMediaContext(
+    mediaContent: MediaContent[],
+  ): Promise<{ context: string; processedMedia: ProcessedMediaInfo[] }> {
+    const processedMedia: ProcessedMediaInfo[] = [];
     let context = '[媒体内容]\n';
-    
-    for (const media of mediaContent) {
+
+    for (let index = 0; index < mediaContent.length; index++) {
+      const media = mediaContent[index];
+      const mediaId = media.hash || media.filePath || `media-${index}`;
+
       switch (media.type) {
         case 'image':
           context += `- 图片: ${media.originalName || '未知图片'}\n`;
@@ -1461,10 +1473,23 @@ ${conversationText}
               const transcription = await this.transcribeVoice(media);
               if (transcription) {
                 context += `  转录内容: ${transcription}\n`;
+                processedMedia.push({
+                  mediaId,
+                  processType: 'transcription',
+                  result: transcription,
+                  success: true,
+                });
               }
             } catch (error) {
               console.error('[Butler] 语音转录失败:', error);
               context += `  (语音转录失败)\n`;
+              processedMedia.push({
+                mediaId,
+                processType: 'transcription',
+                result: '',
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+              });
             }
           }
           break;
@@ -1488,7 +1513,7 @@ ${conversationText}
       }
     }
     
-    return context;
+    return { context, processedMedia };
   }
 
   /**
@@ -1505,21 +1530,16 @@ ${conversationText}
       return null;
     }
 
-    try {
-      // 使用转录服务
-      const transcriptionService = (this.multimodalSelector as any).config?.transcriptionService;
-      if (!transcriptionService) {
-        return null;
-      }
-
-      return await transcriptionService.transcribe(
-        media.filePath,
-        config.voice_processing.transcription_language
-      );
-    } catch (error) {
-      console.error('[Butler] 语音转录失败:', error);
+    // 使用转录服务（失败时向外抛出，供 buildMediaContext 记录 processedMedia）
+    const transcriptionService = (this.multimodalSelector as any).config?.transcriptionService;
+    if (!transcriptionService) {
       return null;
     }
+
+    return await transcriptionService.transcribe(
+      media.filePath,
+      config.voice_processing.transcription_language
+    );
   }
 
   /**
@@ -1556,6 +1576,52 @@ ${conversationText}
     }
   }
 
+  private static mergeProcessedMediaInfo(
+    a: ProcessedMediaInfo[],
+    b: ProcessedMediaInfo[],
+  ): ProcessedMediaInfo[] {
+    const map = new Map<string, ProcessedMediaInfo>();
+    const key = (p: ProcessedMediaInfo) => `${p.mediaId}\0${p.processType}`;
+    for (const p of a) map.set(key(p), p);
+    for (const p of b) map.set(key(p), p);
+    return [...map.values()];
+  }
+
+  /**
+   * 从事件流中提取媒体处理信息（可与流水线侧采集的转录结果合并）
+   */
+  private extractProcessedMediaInfo(
+    events: Array<{ type: string; data: unknown }>,
+    _mediaContent: MediaContent[],
+  ): ProcessedMediaInfo[] {
+    const processed: ProcessedMediaInfo[] = [];
+
+    events.forEach((event, index) => {
+      if (event.type === "transcription_complete") {
+        const data = event.data as { mediaId?: string; transcription?: string } | undefined;
+        processed.push({
+          mediaId: data?.mediaId || `media-${index}`,
+          processType: "transcription",
+          result: data?.transcription || "",
+          success: true,
+        });
+      }
+
+      if (event.type === "transcription_failed") {
+        const data = event.data as { mediaId?: string; error?: string } | undefined;
+        processed.push({
+          mediaId: data?.mediaId || `media-${index}`,
+          processType: "transcription",
+          result: "",
+          success: false,
+          error: data?.error || "转录失败",
+        });
+      }
+    });
+
+    return processed;
+  }
+
   /**
    * Handle an inbound WeChat/channel message.
    * If the member has an active interview, route to the interview flow.
@@ -1588,7 +1654,10 @@ ${conversationText}
     session.updateSystemPrompt(this.buildSystemPrompt(member));
 
     // 构建包含多媒体上下文的消息
-    const enhancedMessage = await this.buildEnhancedMessage(msg, member);
+    let { message: enhancedMessage, processedMedia: pipelineProcessed } = await this.buildEnhancedMessage(
+      msg,
+      member,
+    );
 
     const events: Array<{ type: string; data: unknown }> = [];
     let lastTurnText = "";
@@ -1620,10 +1689,15 @@ ${conversationText}
         
         if (errorResult.shouldFallbackToText && errorResult.modifiedMessage) {
           // 使用纯文本降级重试
-          const fallbackMessage = await this.buildEnhancedMessage(errorResult.modifiedMessage, member);
-          
+          const fallbackBuilt = await this.buildEnhancedMessage(errorResult.modifiedMessage, member);
+          pipelineProcessed = ButlerService.mergeProcessedMediaInfo(
+            pipelineProcessed,
+            fallbackBuilt.processedMedia,
+          );
+          enhancedMessage = fallbackBuilt.message;
+
           try {
-            await session.prompt(fallbackMessage);
+            await session.prompt(enhancedMessage);
             console.log(`[Butler] LLM 错误后纯文本降级成功: ${member.id}`);
           } catch (fallbackErr) {
             // 纯文本降级也失败，发送友好错误消息
@@ -1645,7 +1719,20 @@ ${conversationText}
 
     const reply = lastTurnText || "（无回复）";
 
-    this.db.saveConversationLog(member.id, msg.text, reply, JSON.stringify(events));
+    const mediaContent = msg.mediaContent || [];
+    const processedMedia = ButlerService.mergeProcessedMediaInfo(
+      pipelineProcessed,
+      this.extractProcessedMediaInfo(events, mediaContent),
+    );
+    this.db.saveConversationLogWithMedia(
+      member.id,
+      member.name,
+      msg.text,
+      reply,
+      JSON.stringify(events),
+      mediaContent,
+      processedMedia,
+    );
     this.db.saveChat(member.id, "user", msg.text);
     this.db.saveChat(member.id, "assistant", reply);
 
