@@ -118,6 +118,18 @@ export class Database {
 
       CREATE INDEX IF NOT EXISTS idx_action_exec
         ON action_execution_log(member_id, routine_id, action_id, executed_at);
+
+      CREATE TABLE IF NOT EXISTS session_states (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        member_id TEXT NOT NULL UNIQUE,
+        messages_json TEXT NOT NULL,
+        system_prompt TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_session_member
+        ON session_states(member_id, updated_at);
     `);
   }
 
@@ -136,6 +148,20 @@ export class Database {
       .all(memberId, limit) as ChatRecord[];
   }
 
+  /**
+   * 根据日期范围获取聊天记录
+   */
+  getChatsByDateRange(memberId: string, startDate: string, endDate: string): ChatRecord[] {
+    return this.db
+      .prepare(
+        `SELECT id, member_id as memberId, role, content, created_at as createdAt
+         FROM chat_history 
+         WHERE member_id = ? AND created_at >= ? AND created_at <= ?
+         ORDER BY created_at ASC`,
+      )
+      .all(memberId, startDate, endDate) as ChatRecord[];
+  }
+
   saveSummary(memberId: string, summary: string, periodStart: string, periodEnd: string): void {
     this.db
       .prepare(
@@ -151,6 +177,25 @@ export class Database {
       )
       .get(memberId) as { summary: string } | undefined;
     return row?.summary ?? null;
+  }
+
+  /**
+   * 获取最新的完整摘要信息
+   */
+  getLatestSummaryDetail(memberId: string): { summary: string; createdAt: string; periodEnd: string } | null {
+    const row = this.db
+      .prepare(
+        `SELECT summary, created_at, period_end FROM memory_summaries WHERE member_id = ? ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(memberId) as { summary: string; created_at: string; period_end: string } | undefined;
+    
+    if (!row) return null;
+    
+    return {
+      summary: row.summary,
+      createdAt: row.created_at,
+      periodEnd: row.period_end,
+    };
   }
 
   logReminder(memberId: string, routineId: string, reminderId: string, channel: string): void {
@@ -372,6 +417,151 @@ export class Database {
          GROUP BY member_id`,
       )
       .all() as { memberId: string; lastMessageTime: string }[];
+  }
+
+  /**
+   * 保存会话状态到数据库
+   */
+  saveSessionState(memberId: string, messages: any[], systemPrompt: string): void {
+    const messagesJson = JSON.stringify(messages);
+    
+    this.db.prepare(`
+      INSERT OR REPLACE INTO session_states (member_id, messages_json, system_prompt, updated_at)
+      VALUES (?, ?, ?, datetime('now'))
+    `).run(memberId, messagesJson, systemPrompt);
+  }
+
+  /**
+   * 从数据库获取会话状态
+   */
+  getSessionState(memberId: string): { messages: any[]; systemPrompt: string; updatedAt: string } | null {
+    const result = this.db.prepare(`
+      SELECT messages_json, system_prompt, updated_at
+      FROM session_states 
+      WHERE member_id = ?
+    `).get(memberId) as { messages_json: string; system_prompt: string; updated_at: string } | undefined;
+
+    if (!result) {
+      return null;
+    }
+
+    try {
+      const messages = JSON.parse(result.messages_json);
+      return {
+        messages,
+        systemPrompt: result.system_prompt,
+        updatedAt: result.updated_at,
+      };
+    } catch (error) {
+      console.error(`[Database] 解析会话状态失败，memberId: ${memberId}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 删除会话状态
+   */
+  deleteSessionState(memberId: string): void {
+    this.db.prepare(`DELETE FROM session_states WHERE member_id = ?`).run(memberId);
+  }
+
+  /**
+   * 获取所有活跃的会话状态
+   */
+  getAllSessionStates(): { memberId: string; messages: any[]; systemPrompt: string; updatedAt: string }[] {
+    const results = this.db.prepare(`
+      SELECT member_id, messages_json, system_prompt, updated_at
+      FROM session_states 
+      ORDER BY updated_at DESC
+    `).all() as { member_id: string; messages_json: string; system_prompt: string; updated_at: string }[];
+
+    const sessions: { memberId: string; messages: any[]; systemPrompt: string; updatedAt: string }[] = [];
+
+    for (const result of results) {
+      try {
+        const messages = JSON.parse(result.messages_json);
+        sessions.push({
+          memberId: result.member_id,
+          messages,
+          systemPrompt: result.system_prompt,
+          updatedAt: result.updated_at,
+        });
+      } catch (error) {
+        console.error(`[Database] 解析会话状态失败，memberId: ${result.member_id}`, error);
+      }
+    }
+
+    return sessions;
+  }
+
+  /**
+   * 清理过期的会话状态（超过指定天数）
+   */
+  cleanOldSessionStates(daysToKeep: number = 7): void {
+    const result = this.db.prepare(`
+      DELETE FROM session_states 
+      WHERE datetime(updated_at) < datetime('now', '-${daysToKeep} days')
+    `).run();
+    
+    if (result.changes > 0) {
+      console.log(`[Database] 清理了 ${result.changes} 个过期会话状态`);
+    }
+  }
+
+  /**
+   * 清理过期的对话日志
+   */
+  cleanOldConversationLogs(daysToKeep: number = 90): void {
+    const result = this.db.prepare(`
+      DELETE FROM conversation_logs 
+      WHERE datetime(created_at) < datetime('now', '-${daysToKeep} days')
+    `).run();
+    
+    if (result.changes > 0) {
+      console.log(`[Database] 清理了 ${result.changes} 条过期对话日志`);
+    }
+  }
+
+  /**
+   * 清理过期的token使用记录
+   */
+  cleanOldTokenUsage(daysToKeep: number = 60): void {
+    const result = this.db.prepare(`
+      DELETE FROM token_usage 
+      WHERE datetime(created_at) < datetime('now', '-${daysToKeep} days')
+    `).run();
+    
+    if (result.changes > 0) {
+      console.log(`[Database] 清理了 ${result.changes} 条过期token使用记录`);
+    }
+  }
+
+  /**
+   * 清理过期的提醒日志
+   */
+  cleanOldReminderLogs(daysToKeep: number = 30): void {
+    const result = this.db.prepare(`
+      DELETE FROM reminder_logs 
+      WHERE datetime(sent_at) < datetime('now', '-${daysToKeep} days')
+    `).run();
+    
+    if (result.changes > 0) {
+      console.log(`[Database] 清理了 ${result.changes} 条过期提醒日志`);
+    }
+  }
+
+  /**
+   * 清理过期的执行日志
+   */
+  cleanOldActionExecutionLogs(daysToKeep: number = 60): void {
+    const result = this.db.prepare(`
+      DELETE FROM action_execution_log 
+      WHERE datetime(executed_at) < datetime('now', '-${daysToKeep} days')
+    `).run();
+    
+    if (result.changes > 0) {
+      console.log(`[Database] 清理了 ${result.changes} 条过期执行日志`);
+    }
   }
 
   close(): void {

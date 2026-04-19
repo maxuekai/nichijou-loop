@@ -87,6 +87,12 @@ export class ButlerService {
 
     this.gateway.onMessage(this.handleMessage.bind(this));
     this.gateway.onUnboundMessage(this.handleUnboundMessage.bind(this));
+
+    // 启动会话持久化
+    this.startSessionPersistence();
+
+    // 启动记忆管理
+    this.startMemoryManagement();
   }
 
   /** 仅加载 `~/.nichijou/config.yaml` 中 `plugins` 列出的包（安装目录 ~/.nichijou/plugins） */
@@ -193,13 +199,35 @@ export class ButlerService {
     this.sessions.clear();
   }
 
+  private currentMemberId: string | undefined;
+  
+  // 上下文管理配置
+  private readonly MAX_CONTEXT_MESSAGES = 100; // 最大消息数
+  private readonly KEEP_RECENT_MESSAGES = 30;   // 保留的最近消息数
+  
+  // 会话持久化配置
+  private readonly SESSION_SAVE_INTERVAL = 30 * 1000; // 30秒保存一次会话状态
+  private sessionSaveTimer?: NodeJS.Timeout;
+  
+  // 记忆管理配置
+  private readonly MEMORY_CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; // 24小时清理一次
+  private readonly SUMMARY_GENERATION_INTERVAL = 12 * 60 * 60 * 1000; // 12小时检查一次摘要生成
+  private memoryCleanupTimer?: NodeJS.Timeout;
+  private summaryGenerationTimer?: NodeJS.Timeout;
+
   private buildTools(): ToolDefinition[] {
     return [
       ...createFamilyTools(this.familyManager, this.storage),
       ...createRoutineTools(this.routineEngine, this.familyManager),
       ...createMemoryTools(this.storage),
       ...createReminderTools(this.reminderScheduler),
-      ...createMessageTools(this.gateway, (id) => this.clearMemberSession(id)),
+      ...createMessageTools(
+        this.gateway, 
+        this.familyManager,
+        this.storage,
+        (id) => this.clearMemberSession(id),
+        () => this.currentMemberId
+      ),
       ...this.pluginHost.getAllTools(),
     ];
   }
@@ -212,6 +240,566 @@ export class ButlerService {
     this.sessions.clear();
   }
 
+  /**
+   * 管理会话上下文长度，防止消息过多影响性能
+   * 保留系统提示和最近的N轮对话，对超出部分进行压缩存储
+   */
+  private async manageContextLength(session: any, memberId: string): Promise<void> {
+    const messages = session.getMessages();
+    
+    if (messages.length <= this.MAX_CONTEXT_MESSAGES) {
+      return; // 未超出限制，无需处理
+    }
+
+    // 找到系统消息
+    const systemMessage = messages.find((msg: any) => msg.role === "system");
+    if (!systemMessage) {
+      console.warn(`[ContextManager] 未找到系统消息，memberId: ${memberId}`);
+      return;
+    }
+
+    // 保留最近的消息（排除系统消息）
+    const nonSystemMessages = messages.filter((msg: any) => msg.role !== "system");
+    const recentMessages = nonSystemMessages.slice(-this.KEEP_RECENT_MESSAGES);
+    const oldMessages = nonSystemMessages.slice(0, -this.KEEP_RECENT_MESSAGES);
+
+    if (oldMessages.length === 0) {
+      return; // 没有需要压缩的旧消息
+    }
+
+    // 生成对话摘要
+    const summary = await this.generateConversationSummary(oldMessages, memberId);
+    
+    // 创建摘要消息
+    const summaryMessage = {
+      role: "system" as const,
+      content: `# 对话历史摘要\n\n${summary}\n\n---\n\n${systemMessage.content}`,
+    };
+
+    // 重构消息数组：摘要 + 最近消息
+    const newMessages = [summaryMessage, ...recentMessages];
+    
+    // 清除旧会话并创建新的
+    session.clearHistory();
+    session.updateSystemPrompt(summaryMessage.content);
+    
+    // 重新添加最近的消息到会话中
+    for (const msg of recentMessages) {
+      if (msg.role !== "system") {
+        // 注意：这里简化处理，实际可能需要更复杂的消息恢复逻辑
+        session.state.messages.push(msg);
+      }
+    }
+
+    console.log(`[ContextManager] 压缩了 ${oldMessages.length} 条历史消息，保留了 ${recentMessages.length} 条最近消息，memberId: ${memberId}`);
+
+    // 保存摘要到数据库
+    this.saveConversationSummary(memberId, oldMessages, summary);
+  }
+
+  /**
+   * 生成对话摘要
+   */
+  private async generateConversationSummary(messages: any[], memberId: string): Promise<string> {
+    const member = this.familyManager.getMember(memberId);
+    const memberName = member?.preferredName || member?.name || "未知成员";
+    
+    // 构建摘要提示
+    let conversationText = "";
+    for (const msg of messages) {
+      const speaker = msg.role === "user" ? memberName : "管家";
+      conversationText += `${speaker}: ${msg.content}\n`;
+    }
+
+    const summaryPrompt = `请对以下对话内容生成简洁的摘要，重点保留：
+1. 成员的重要偏好和习惯
+2. 关键的决定和约定
+3. 重要的个人信息更新
+4. 需要持续关注的事项
+
+对话内容：
+${conversationText}
+
+请用简洁的中文总结，格式为要点列表：`;
+
+    try {
+      const provider = this.getProvider();
+      const response = await provider.chat({
+        messages: [{ role: "user", content: summaryPrompt }],
+        temperature: 0.3,
+        maxTokens: 500,
+      });
+
+      return response.message.content || "对话摘要生成失败";
+    } catch (error) {
+      console.error(`[ContextManager] 生成对话摘要失败，memberId: ${memberId}`, error);
+      return `对话历史摘要（${messages.length}条消息，${new Date().toLocaleDateString()}）`;
+    }
+  }
+
+  /**
+   * 保存对话摘要到数据库
+   */
+  private saveConversationSummary(memberId: string, messages: any[], summary: string): void {
+    if (messages.length === 0) return;
+
+    const startTime = new Date();
+    const endTime = new Date();
+    
+    try {
+      this.db.saveSummary(memberId, summary, startTime.toISOString(), endTime.toISOString());
+    } catch (error) {
+      console.error(`[ContextManager] 保存对话摘要失败，memberId: ${memberId}`, error);
+    }
+  }
+
+  /**
+   * 保存单个会话状态到数据库
+   */
+  private saveSessionState(memberId: string, session: any): void {
+    try {
+      const messages = session.getMessages();
+      const systemPrompt = session.state.systemPrompt;
+      this.db.saveSessionState(memberId, messages, systemPrompt);
+    } catch (error) {
+      console.error(`[SessionPersistence] 保存会话状态失败，memberId: ${memberId}`, error);
+    }
+  }
+
+  /**
+   * 保存所有活跃会话状态
+   */
+  private saveAllSessionStates(): void {
+    console.log(`[SessionPersistence] 正在保存 ${this.sessions.size} 个活跃会话状态`);
+    
+    for (const [memberId, session] of this.sessions.entries()) {
+      this.saveSessionState(memberId, session);
+    }
+  }
+
+  /**
+   * 从数据库恢复会话状态，结合chat_history表的历史记录
+   */
+  private restoreSessionFromDatabase(memberId: string): any | null {
+    try {
+      const sessionData = this.db.getSessionState(memberId);
+      
+      // 如果没有保存的会话状态，尝试从chat_history恢复
+      if (!sessionData) {
+        return this.restoreSessionFromChatHistory(memberId);
+      }
+
+      // 检查会话状态是否过于陈旧（超过24小时不恢复）
+      const updatedAt = new Date(sessionData.updatedAt);
+      const now = new Date();
+      const hoursSinceUpdate = (now.getTime() - updatedAt.getTime()) / (1000 * 60 * 60);
+      
+      if (hoursSinceUpdate > 24) {
+        console.log(`[SessionPersistence] 会话状态过于陈旧（${hoursSinceUpdate.toFixed(1)}小时），尝试从chat_history恢复，memberId: ${memberId}`);
+        this.db.deleteSessionState(memberId);
+        return this.restoreSessionFromChatHistory(memberId);
+      }
+
+      // 整合chat_history中的新消息（在会话状态保存后的消息）
+      const recentChats = this.db.getRecentChats(memberId, 20);
+      const sessionLastUpdate = new Date(sessionData.updatedAt);
+      
+      // 找出会话状态保存后的新消息
+      const newMessages = recentChats
+        .filter(chat => new Date(chat.createdAt) > sessionLastUpdate)
+        .reverse() // 按时间顺序排列
+        .map(chat => ({
+          role: chat.role as "user" | "assistant",
+          content: chat.content,
+        }));
+
+      let finalMessages = sessionData.messages;
+      
+      if (newMessages.length > 0) {
+        console.log(`[SessionPersistence] 发现 ${newMessages.length} 条新的历史消息，整合到会话中，memberId: ${memberId}`);
+        finalMessages = [...sessionData.messages, ...newMessages];
+      }
+
+      // 创建新的会话并恢复状态
+      const member = this.familyManager.getMember(memberId);
+      const session = createAgentSession({
+        provider: this.getProvider(),
+        systemPrompt: this.buildSystemPrompt(member ?? undefined), // 使用最新的系统提示
+        tools: this.buildTools(),
+        messages: finalMessages,
+      });
+
+      console.log(`[SessionPersistence] 恢复会话状态成功，总消息数: ${finalMessages.length}，memberId: ${memberId}`);
+      return session;
+
+    } catch (error) {
+      console.error(`[SessionPersistence] 恢复会话状态失败，memberId: ${memberId}`, error);
+      this.db.deleteSessionState(memberId);
+      return this.restoreSessionFromChatHistory(memberId);
+    }
+  }
+
+  /**
+   * 从chat_history表恢复会话（用于没有保存会话状态的情况）
+   */
+  private restoreSessionFromChatHistory(memberId: string): any | null {
+    try {
+      const recentChats = this.db.getRecentChats(memberId, 30); // 获取最近30条聊天记录
+      
+      if (recentChats.length === 0) {
+        return null; // 没有历史记录，返回null让系统创建新会话
+      }
+
+      // 检查最近的用户消息是否过于陈旧（超过7天不恢复）
+      const lastUserMessage = recentChats.find(chat => chat.role === "user");
+      if (lastUserMessage) {
+        const lastMessageTime = new Date(lastUserMessage.createdAt);
+        const now = new Date();
+        const daysSinceLastMessage = (now.getTime() - lastMessageTime.getTime()) / (1000 * 60 * 60 * 24);
+        
+        if (daysSinceLastMessage > 7) {
+          console.log(`[SessionPersistence] 历史记录过于陈旧（${daysSinceLastMessage.toFixed(1)}天），不恢复，memberId: ${memberId}`);
+          return null;
+        }
+      }
+
+      // 转换为消息格式（按时间倒序，所以需要reverse）
+      const messages = recentChats.reverse().map(chat => ({
+        role: chat.role as "user" | "assistant",
+        content: chat.content,
+      }));
+
+      // 添加当前系统提示作为第一条消息
+      const member = this.familyManager.getMember(memberId);
+      const systemPrompt = this.buildSystemPrompt(member ?? undefined);
+      const finalMessages = [
+        { role: "system" as const, content: systemPrompt },
+        ...messages,
+      ];
+
+      const session = createAgentSession({
+        provider: this.getProvider(),
+        systemPrompt,
+        tools: this.buildTools(),
+        messages: finalMessages,
+      });
+
+      console.log(`[SessionPersistence] 从chat_history恢复会话成功，消息数: ${finalMessages.length}，memberId: ${memberId}`);
+      return session;
+
+    } catch (error) {
+      console.error(`[SessionPersistence] 从chat_history恢复会话失败，memberId: ${memberId}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 启动时恢复所有会话状态
+   */
+  private restoreAllSessionStates(): void {
+    try {
+      const allSessionStates = this.db.getAllSessionStates();
+      console.log(`[SessionPersistence] 发现 ${allSessionStates.length} 个保存的会话状态`);
+
+      for (const sessionData of allSessionStates) {
+        const restoredSession = this.restoreSessionFromDatabase(sessionData.memberId);
+        if (restoredSession) {
+          this.sessions.set(sessionData.memberId, restoredSession);
+        }
+      }
+
+      console.log(`[SessionPersistence] 成功恢复 ${this.sessions.size} 个会话`);
+    } catch (error) {
+      console.error('[SessionPersistence] 恢复会话状态时发生错误', error);
+    }
+  }
+
+  /**
+   * 启动定期会话保存
+   */
+  private startSessionPersistence(): void {
+    // 启动时恢复会话
+    this.restoreAllSessionStates();
+
+    // 定期保存会话状态
+    this.sessionSaveTimer = setInterval(() => {
+      if (this.sessions.size > 0) {
+        this.saveAllSessionStates();
+      }
+    }, this.SESSION_SAVE_INTERVAL);
+
+    console.log(`[SessionPersistence] 已启动会话持久化，保存间隔: ${this.SESSION_SAVE_INTERVAL / 1000}秒`);
+  }
+
+  /**
+   * 停止会话持久化
+   */
+  private stopSessionPersistence(): void {
+    if (this.sessionSaveTimer) {
+      clearInterval(this.sessionSaveTimer);
+      this.sessionSaveTimer = undefined;
+    }
+
+    // 最后一次保存所有会话
+    this.saveAllSessionStates();
+    console.log('[SessionPersistence] 已停止会话持久化');
+  }
+
+  /**
+   * 获取成员最近的记忆摘要
+   */
+  private getRecentMemorySummary(memberId: string): string | null {
+    try {
+      const latestSummary = this.db.getLatestSummaryDetail(memberId);
+      if (!latestSummary) {
+        return null;
+      }
+
+      // 检查摘要是否过于陈旧（超过30天忽略）
+      const summaryDate = new Date(latestSummary.createdAt);
+      const now = new Date();
+      const daysSinceSummary = (now.getTime() - summaryDate.getTime()) / (1000 * 60 * 60 * 24);
+      
+      if (daysSinceSummary > 30) {
+        console.log(`[MemorySummary] 摘要过于陈旧（${daysSinceSummary.toFixed(1)}天），忽略，memberId: ${memberId}`);
+        return null;
+      }
+
+      return latestSummary.summary;
+    } catch (error) {
+      console.error(`[MemorySummary] 获取记忆摘要失败，memberId: ${memberId}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 生成并保存周期性对话摘要
+   */
+  private async generatePeriodicSummary(memberId: string): Promise<void> {
+    try {
+      const member = this.familyManager.getMember(memberId);
+      if (!member) {
+        console.warn(`[MemorySummary] 未找到成员信息，memberId: ${memberId}`);
+        return;
+      }
+
+      // 获取最新摘要的时间点，确定摘要的起始时间
+      const latestSummary = this.db.getLatestSummaryDetail(memberId);
+      const startDate = latestSummary 
+        ? new Date(latestSummary.periodEnd)
+        : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 如果没有摘要，从7天前开始
+
+      const endDate = new Date();
+
+      // 获取时间段内的聊天记录
+      const chats = this.db.getChatsByDateRange(memberId, startDate.toISOString(), endDate.toISOString());
+      
+      if (chats.length < 10) {
+        console.log(`[MemorySummary] 对话数量不足（${chats.length}），跳过摘要生成，memberId: ${memberId}`);
+        return;
+      }
+
+      // 转换为对话文本
+      const memberName = member.preferredName || member.name;
+      let conversationText = "";
+      for (const chat of chats) {
+        const speaker = chat.role === "user" ? memberName : "管家";
+        conversationText += `${speaker}: ${chat.content}\n`;
+      }
+
+      // 生成摘要
+      const summary = await this.generateDetailedMemorySummary(conversationText, memberName);
+
+      // 保存摘要
+      this.db.saveSummary(memberId, summary, startDate.toISOString(), endDate.toISOString());
+
+      console.log(`[MemorySummary] 为 ${memberName} 生成了周期性摘要，覆盖了 ${chats.length} 条对话`);
+    } catch (error) {
+      console.error(`[MemorySummary] 生成周期性摘要失败，memberId: ${memberId}`, error);
+    }
+  }
+
+  /**
+   * 生成详细的记忆摘要
+   */
+  private async generateDetailedMemorySummary(conversationText: string, memberName: string): Promise<string> {
+    const summaryPrompt = `作为家庭AI管家，请为与 ${memberName} 的对话生成详细摘要。重点记录：
+
+1. **个人偏好与习惯**：
+   - 生活作息偏好
+   - 饮食习惯和禁忌
+   - 兴趣爱好
+   - 工作/学习安排
+
+2. **重要决定与计划**：
+   - 近期的重要决定
+   - 制定的计划和目标
+   - 需要后续跟进的事项
+
+3. **情感状态与关切**：
+   - 表达的担忧或困扰
+   - 情绪变化和原因
+   - 对家庭成员的关心
+
+4. **关键信息更新**：
+   - 个人情况的变化
+   - 新的联系方式或地址
+   - 健康状况更新
+
+对话内容：
+${conversationText}
+
+请用简洁明了的中文总结，采用分类要点的格式，避免冗余信息：`;
+
+    try {
+      const provider = this.getProvider();
+      const response = await provider.chat({
+        messages: [{ role: "user", content: summaryPrompt }],
+        temperature: 0.3,
+        maxTokens: 800,
+      });
+
+      return response.message.content || `${memberName} 的对话摘要（生成失败）`;
+    } catch (error) {
+      console.error(`[MemorySummary] 生成详细摘要失败`, error);
+      return `${memberName} 的对话摘要（${new Date().toLocaleDateString()}）`;
+    }
+  }
+
+  /**
+   * 执行记忆清理任务
+   */
+  private performMemoryCleanup(): void {
+    try {
+      console.log('[MemoryManager] 开始执行记忆清理任务');
+
+      // 清理30天前的聊天记录
+      this.db.cleanOldChats(30);
+
+      // 清理7天前的会话状态
+      this.db.cleanOldSessionStates(7);
+
+      // 清理90天前的对话日志
+      this.db.cleanOldConversationLogs(90);
+
+      // 清理60天前的token使用记录
+      this.db.cleanOldTokenUsage(60);
+
+      // 清理30天前的提醒日志
+      this.db.cleanOldReminderLogs(30);
+
+      // 清理60天前的执行日志
+      this.db.cleanOldActionExecutionLogs(60);
+
+      console.log('[MemoryManager] 记忆清理任务完成');
+    } catch (error) {
+      console.error('[MemoryManager] 记忆清理任务失败', error);
+    }
+  }
+
+  /**
+   * 检查并生成需要的对话摘要
+   */
+  private async checkAndGenerateSummaries(): Promise<void> {
+    try {
+      console.log('[MemoryManager] 开始检查对话摘要生成需求');
+      
+      const members = this.familyManager.getMembers();
+      let generatedCount = 0;
+
+      for (const member of members) {
+        try {
+          // 获取最新摘要
+          const latestSummary = this.db.getLatestSummaryDetail(member.id);
+          
+          // 确定检查起始时间
+          const checkStartTime = latestSummary 
+            ? new Date(latestSummary.periodEnd)
+            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+          // 检查是否有足够的新对话需要摘要
+          const recentChats = this.db.getChatsByDateRange(
+            member.id, 
+            checkStartTime.toISOString(), 
+            new Date().toISOString()
+          );
+
+          // 如果新对话超过20条，或者距离上次摘要超过3天且有超过5条对话，则生成摘要
+          const daysSinceLastSummary = latestSummary 
+            ? (Date.now() - new Date(latestSummary.periodEnd).getTime()) / (1000 * 60 * 60 * 24)
+            : 7;
+
+          const shouldGenerate = recentChats.length >= 20 || 
+                                (daysSinceLastSummary >= 3 && recentChats.length >= 5);
+
+          if (shouldGenerate) {
+            await this.generatePeriodicSummary(member.id);
+            generatedCount++;
+            
+            // 避免同时生成太多摘要，添加短暂延迟
+            if (generatedCount % 3 === 0) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          }
+        } catch (error) {
+          console.error(`[MemoryManager] 为成员 ${member.id} 生成摘要时出错`, error);
+        }
+      }
+
+      if (generatedCount > 0) {
+        console.log(`[MemoryManager] 生成了 ${generatedCount} 个对话摘要`);
+      } else {
+        console.log('[MemoryManager] 无需生成新的对话摘要');
+      }
+    } catch (error) {
+      console.error('[MemoryManager] 检查摘要生成时出错', error);
+    }
+  }
+
+  /**
+   * 启动记忆管理调度器
+   */
+  private startMemoryManagement(): void {
+    // 启动时立即执行一次清理（延迟5分钟避免影响启动）
+    setTimeout(() => {
+      this.performMemoryCleanup();
+    }, 5 * 60 * 1000);
+
+    // 启动时延迟30分钟执行摘要检查，避免启动时负载过高
+    setTimeout(() => {
+      this.checkAndGenerateSummaries();
+    }, 30 * 60 * 1000);
+
+    // 定期清理任务（每24小时）
+    this.memoryCleanupTimer = setInterval(() => {
+      this.performMemoryCleanup();
+    }, this.MEMORY_CLEANUP_INTERVAL);
+
+    // 定期摘要生成检查（每12小时）
+    this.summaryGenerationTimer = setInterval(() => {
+      this.checkAndGenerateSummaries();
+    }, this.SUMMARY_GENERATION_INTERVAL);
+
+    console.log('[MemoryManager] 已启动记忆管理调度器');
+  }
+
+  /**
+   * 停止记忆管理调度器
+   */
+  private stopMemoryManagement(): void {
+    if (this.memoryCleanupTimer) {
+      clearInterval(this.memoryCleanupTimer);
+      this.memoryCleanupTimer = undefined;
+    }
+
+    if (this.summaryGenerationTimer) {
+      clearInterval(this.summaryGenerationTimer);
+      this.summaryGenerationTimer = undefined;
+    }
+
+    console.log('[MemoryManager] 已停止记忆管理调度器');
+  }
+
   getAllToolDescriptions(): Array<{ source: string; name: string; description: string; parameters: Record<string, unknown> }> {
     const result: Array<{ source: string; name: string; description: string; parameters: Record<string, unknown> }> = [];
     const coreTools = [
@@ -219,7 +807,7 @@ export class ButlerService {
       ...createRoutineTools(this.routineEngine, this.familyManager),
       ...createMemoryTools(this.storage),
       ...createReminderTools(this.reminderScheduler),
-      ...createMessageTools(this.gateway, () => {}),
+      ...createMessageTools(this.gateway, this.familyManager, this.storage, () => {}),
     ];
     for (const t of coreTools) {
       result.push({ source: "core", name: t.name, description: t.description, parameters: t.parameters });
@@ -243,7 +831,7 @@ export class ButlerService {
       ...createRoutineTools(this.routineEngine, this.familyManager),
       ...createMemoryTools(this.storage),
       ...createReminderTools(this.reminderScheduler),
-      ...createMessageTools(this.gateway, (id) => this.clearMemberSession(id)),
+      ...createMessageTools(this.gateway, this.familyManager, this.storage, (id: string) => this.clearMemberSession(id)),
     ];
     const tool = coreTools.find((t) => t.name === toolName);
     if (!tool) return { content: `工具 "${toolName}" 不存在`, isError: true };
@@ -293,6 +881,13 @@ export class ButlerService {
       if (profile) {
         prompt += `# 当前对话成员\n\n${profile}\n\n---\n\n`;
       }
+
+      // 添加历史对话摘要
+      const recentSummary = this.getRecentMemorySummary(member.id);
+      if (recentSummary) {
+        prompt += `# 历史对话要点\n\n${recentSummary}\n\n---\n\n`;
+      }
+
       const today = new Date();
       const tz = this.config.get().timezone || "Asia/Shanghai";
       const plan = this.routineEngine.resolveDayPlan(member.id, today, tz);
@@ -311,8 +906,55 @@ export class ButlerService {
       prompt += `当调用天气相关插件工具且用户未提供城市时，优先使用此位置。\n\n---\n\n`;
     }
 
+    // 添加家庭成员列表（包含昵称信息）
+    const members = this.familyManager.getMembers();
+    if (members.length > 0) {
+      prompt += `# 家庭成员列表\n\n`;
+      for (const memberInfo of members) {
+        const displayName = memberInfo.preferredName || memberInfo.name;
+        let memberLine = `- ${displayName} (ID: ${memberInfo.id})`;
+        
+        // 添加角色信息
+        if (memberInfo.role === "admin") {
+          memberLine += ` [管理员]`;
+        }
+        
+        // 从档案中解析昵称
+        const profile = this.storage.readMemberProfile(memberInfo.id);
+        const aliases: string[] = [];
+        
+        // 从FamilyMember.aliases字段获取昵称
+        if (memberInfo.aliases && memberInfo.aliases.length > 0) {
+          aliases.push(...memberInfo.aliases);
+        }
+        
+        // 从档案中解析昵称
+        if (profile) {
+          const aliasMatch = profile.match(/[-•]\s*昵称[\/别名]*\s*[:：]\s*([^\n\r]+)/i);
+          if (aliasMatch && aliasMatch[1] && aliasMatch[1].trim() !== "（如：妈妈、爸爸、小明等，用逗号分隔多个昵称）") {
+            const aliasText = aliasMatch[1].trim();
+            const profileAliases = aliasText.split(/[,，;；、]\s*/).filter(alias => alias.trim());
+            aliases.push(...profileAliases);
+          }
+        }
+        
+        // 去重并添加昵称信息
+        const uniqueAliases = [...new Set(aliases)];
+        if (uniqueAliases.length > 0) {
+          memberLine += ` (别名: ${uniqueAliases.join(', ')})`;
+        }
+        
+        prompt += `${memberLine}\n`;
+      }
+      prompt += `\n`;
+      
+      // 强调当前对话成员
+      const currentDisplayName = member?.preferredName || member?.name;
+      prompt += `**当前对话成员**: ${currentDisplayName} (ID: ${member?.id ?? "未知"})\n\n---\n\n`;
+    }
+
     prompt += `# 功能说明\n\n你有以下工具可以使用来帮助家庭成员管理生活。请根据对话自然地调用工具。\n`;
-    prompt += `\n当前成员 ID：${member?.id ?? "未知"}\n`;
+    prompt += `\n重要提示：当需要操作其他家庭成员时，请优先使用 resolve_member 工具通过姓名或昵称查找准确的成员ID。\n`;
 
     prompt += `\n# 回复规则\n\n`;
     prompt += `- 回复时只输出最终结论和对用户有用的信息\n`;
@@ -335,6 +977,13 @@ export class ButlerService {
     if (!isOnboarding) {
       const existing = this.sessions.get(memberId);
       if (existing) return existing;
+
+      // 尝试从数据库恢复会话
+      const restored = this.restoreSessionFromDatabase(memberId);
+      if (restored) {
+        this.sessions.set(memberId, restored);
+        return restored;
+      }
     }
 
     const member = this.familyManager.getMember(memberId);
@@ -355,6 +1004,9 @@ export class ButlerService {
    * For WeChat, use handleMessage which extracts only the final reply.
    */
   async chat(memberId: string, input: string, onEvent?: (event: AgentEvent) => void): Promise<string> {
+    // 设置当前成员ID供工具使用
+    this.currentMemberId = memberId;
+    
     const session = this.getOrCreateSession(memberId);
     const member = this.familyManager.getMember(memberId);
     session.updateSystemPrompt(this.buildSystemPrompt(member ?? undefined));
@@ -374,6 +1026,14 @@ export class ButlerService {
       const response = await session.prompt(input);
       this.db.saveChat(memberId, "user", input);
       this.db.saveChat(memberId, "assistant", response);
+      
+      // 智能上下文长度管理
+      try {
+        await this.manageContextLength(session, memberId);
+      } catch (error) {
+        console.error(`[ContextManager] 上下文管理失败，memberId: ${memberId}`, error);
+      }
+      
       return response;
     } finally {
       unsub();
@@ -446,6 +1106,9 @@ export class ButlerService {
    * Otherwise, normal agent session.
    */
   private async handleMessage(member: FamilyMember, msg: InboundMessage): Promise<void> {
+    // 设置当前成员ID供工具使用
+    this.currentMemberId = member.id;
+    
     // Slash commands (admin only)
     if (msg.text.startsWith("/")) {
       const reply = await this.handleSlashCommand(member, msg.text);
@@ -463,6 +1126,11 @@ export class ButlerService {
     await this.startTyping(member.id);
 
     const session = this.getOrCreateSession(member.id);
+    
+    // 统一系统提示刷新机制：每轮对话前更新系统提示
+    // 确保与Web路径（chat方法）行为一致
+    session.updateSystemPrompt(this.buildSystemPrompt(member));
+    
     const events: Array<{ type: string; data: unknown }> = [];
     let lastTurnText = "";
     const model = this.config.get().llm.model;
@@ -518,6 +1186,13 @@ export class ButlerService {
     this.db.saveConversationLog(member.id, msg.text, reply, JSON.stringify(events));
     this.db.saveChat(member.id, "user", msg.text);
     this.db.saveChat(member.id, "assistant", reply);
+
+    // 智能上下文长度管理
+    try {
+      await this.manageContextLength(session, member.id);
+    } catch (error) {
+      console.error(`[ContextManager] 上下文管理失败，memberId: ${member.id}`, error);
+    }
 
     // Stop typing before sending reply
     await this.stopTyping(member.id);
@@ -1286,6 +1961,13 @@ export class ButlerService {
     this.actionExecutor.stop();
     this.reminderScheduler.shutdown();
     this.activityReminderScheduler.shutdown();
+    
+    // 停止会话持久化并保存所有会话
+    this.stopSessionPersistence();
+
+    // 停止记忆管理
+    this.stopMemoryManagement();
+    
     await this.gateway.stopAll();
     this.db.close();
   }

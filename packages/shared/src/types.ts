@@ -52,6 +52,8 @@ export interface FamilyMember {
   id: string;
   familyId: string;
   name: string;
+  aliases?: string[]; // 昵称/别名列表
+  preferredName?: string; // 偏好称呼，如果未设置则使用 name
   channelBindings: Record<string, string>;
   primaryChannel: string;
   role: "admin" | "member";
