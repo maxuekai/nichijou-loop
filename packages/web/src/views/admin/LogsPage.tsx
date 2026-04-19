@@ -3,7 +3,7 @@ import {
   ChevronDownIcon,
   EyeIcon,
   TrashIcon,
-  ClockIcon,
+  ClockIcon as HeroClockIcon,
 } from "@heroicons/react/24/outline";
 import { createIconWrapper } from "../../components/ui/Icon";
 
@@ -11,7 +11,7 @@ import { createIconWrapper } from "../../components/ui/Icon";
 const ChevronIcon = createIconWrapper(ChevronDownIcon);
 const ViewIcon = createIconWrapper(EyeIcon);
 const DeleteIcon = createIconWrapper(TrashIcon);
-const ClockIcon = createIconWrapper(ClockIcon);
+const ClockIcon = createIconWrapper(HeroClockIcon);
 
 interface ConversationLog {
   id: number;
