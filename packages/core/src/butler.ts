@@ -222,13 +222,117 @@ export class ButlerService {
       ...createMemoryTools(this.storage),
       ...createReminderTools(this.reminderScheduler),
       ...createMessageTools(
-        this.gateway, 
+        this.gateway,
         this.familyManager,
         this.storage,
         (id) => this.clearMemberSession(id),
         () => this.currentMemberId
       ),
+      ...this.createDebugTools(), // 添加调试工具
       ...this.pluginHost.getAllTools(),
+    ];
+  }
+
+  /**
+   * 创建调试工具集
+   */
+  private createDebugTools(): ToolDefinition[] {
+    return [
+      {
+        name: "check_current_time",
+        description: "检查和验证系统当前时间和时区设置，用于调试时间相关问题",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+        execute: async () => {
+          const now = new Date();
+          const configTz = this.config.get().timezone || "Asia/Shanghai";
+          
+          // 使用多种方式显示时间，便于对比
+          const utcTime = now.toISOString();
+          const localTime = now.toLocaleString("zh-CN", { timeZone: configTz });
+          const systemTime = now.toString();
+          
+          // 使用Butler的formatNow方法
+          const { display, iso } = this.formatNow();
+          
+          // 详细的时区信息
+          const parts = new Intl.DateTimeFormat("zh-CN", {
+            timeZone: configTz,
+            year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+            weekday: "long",
+            hour12: false,
+          }).formatToParts(now);
+          
+          const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+          
+          const result = {
+            butler时间格式: {
+              display,
+              iso,
+            },
+            原始时间: {
+              utc: utcTime,
+              配置时区显示: localTime,
+              系统时间: systemTime,
+            },
+            时区信息: {
+              配置时区: configTz,
+              系统时区: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              系统环境TZ: process.env.TZ || "未设置",
+            },
+            格式化细节: {
+              年: get("year"),
+              月: get("month"), 
+              日: get("day"),
+              星期: get("weekday"),
+              时: get("hour"),
+              分: get("minute"),
+              秒: get("second"),
+            },
+            timestamp: Date.now(),
+            检查时间: new Date().toISOString(),
+          };
+
+          return {
+            content: `时间检查结果:\n\n${JSON.stringify(result, null, 2)}\n\n如果时间显示不正确，请检查:\n1. 服务器系统时间是否正确\n2. config.yaml中的timezone配置\n3. 是否需要重启服务`
+          };
+        },
+      },
+      {
+        name: "refresh_system_prompt", 
+        description: "强制刷新当前会话的系统提示，用于解决时间或上下文不同步问题",
+        parameters: {
+          type: "object",
+          properties: {
+            memberId: { type: "string", description: "要刷新的成员ID" },
+          },
+          required: ["memberId"],
+        },
+        execute: async (params) => {
+          const memberId = params.memberId as string;
+          const session = this.sessions.get(memberId);
+          
+          if (!session) {
+            return { content: `成员 ${memberId} 没有活跃的对话会话`, isError: true };
+          }
+          
+          const member = this.familyManager.getMember(memberId);
+          const newSystemPrompt = this.buildSystemPrompt(member ?? undefined);
+          
+          // 强制更新系统提示
+          session.updateSystemPrompt(newSystemPrompt);
+          
+          const { display, iso } = this.formatNow();
+          
+          return {
+            content: `已强制刷新成员 ${member?.name || memberId} 的系统提示\n\n更新后的时间信息:\n- 显示时间: ${display}\n- ISO时间: ${iso}\n\n如果时间仍然错误，请使用 check_current_time 工具进一步诊断。`
+          };
+        },
+      },
     ];
   }
 
@@ -1027,10 +1131,17 @@ ${conversationText}
   async chat(memberId: string, input: string, onEvent?: (event: AgentEvent) => void): Promise<string> {
     // 设置当前成员ID供工具使用
     this.currentMemberId = memberId;
-    
+
     const session = this.getOrCreateSession(memberId);
     const member = this.familyManager.getMember(memberId);
+    
+    // 强制更新系统提示以确保时间信息是最新的
     session.updateSystemPrompt(this.buildSystemPrompt(member ?? undefined));
+    
+    // 在用户输入前注入当前时间提醒，确保AI知道准确的时间
+    const { display, iso } = this.formatNow();
+    const timeAwareInput = `[系统时间更新: ${display}, ISO: ${iso}]\n\n${input}`;
+    
     const model = this.config.get().llm.model;
 
     const unsub = session.subscribe((event) => {
@@ -1044,7 +1155,7 @@ ${conversationText}
     }
 
     try {
-      const response = await session.prompt(input);
+      const response = await session.prompt(timeAwareInput);
       this.db.saveChat(memberId, "user", input);
       this.db.saveChat(memberId, "assistant", response);
       
@@ -1151,7 +1262,11 @@ ${conversationText}
     // 统一系统提示刷新机制：每轮对话前更新系统提示
     // 确保与Web路径（chat方法）行为一致
     session.updateSystemPrompt(this.buildSystemPrompt(member));
-    
+
+    // 在用户输入前注入当前时间提醒，确保AI知道准确的时间
+    const { display, iso } = this.formatNow();
+    const timeAwareMessage = `[系统时间更新: ${display}, ISO: ${iso}]\n\n${msg.text}`;
+
     const events: Array<{ type: string; data: unknown }> = [];
     let lastTurnText = "";
     const model = this.config.get().llm.model;
@@ -1167,7 +1282,7 @@ ${conversationText}
     });
 
     try {
-      await session.prompt(msg.text);
+      await session.prompt(timeAwareMessage);
     } catch (err) {
       // Stop typing on error
       await this.stopTyping(member.id);
