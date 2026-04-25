@@ -5,7 +5,6 @@ import {
   TrashIcon,
   PencilIcon,
   CogIcon,
-  XMarkIcon,
   ChevronDownIcon,
   InformationCircleIcon,
   ExclamationTriangleIcon,
@@ -16,184 +15,11 @@ import { createIconWrapper } from "../../components/ui/Icon";
 const DeleteIcon = createIconWrapper(TrashIcon);
 const EditIcon = createIconWrapper(PencilIcon);
 const SettingsIcon = createIconWrapper(CogIcon);
-const CloseIcon = createIconWrapper(XMarkIcon);
 const ChevronIcon = createIconWrapper(ChevronDownIcon);
 const InfoIcon = createIconWrapper(InformationCircleIcon);
 const WarningIcon = createIconWrapper(ExclamationTriangleIcon);
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
-
-// 常用场景模板
-const SCENARIO_TEMPLATES = [
-  {
-    id: "daily_news",
-    name: "每日新闻",
-    description: "每天早上播报当日新闻摘要",
-    category: "新闻播报",
-    template: {
-      title: "每日新闻播报",
-      weekdays: [1, 2, 3, 4, 5], // 工作日
-      time: "08:00",
-      actions: [
-        {
-          id: "act_news_daily",
-          type: "ai_task" as const,
-          trigger: "at" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          prompt: "获取今日重要新闻资讯，整理成简洁摘要"
-        },
-        {
-          id: "act_news_notify",
-          type: "notify" as const,
-          trigger: "after" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          message: "{{result}}"
-        }
-      ]
-    }
-  },
-  {
-    id: "weekly_news",
-    name: "新闻周刊",
-    description: "每周日晚上播报一周新闻汇总",
-    category: "新闻播报",
-    template: {
-      title: "新闻周刊播报",
-      weekdays: [0], // 周日
-      time: "20:00",
-      actions: [
-        {
-          id: "act_weekly_news",
-          type: "plugin" as const,
-          trigger: "at" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          toolName: "news_fetch",
-          toolParams: { mode: "weekly", limit: 15 }
-        },
-        {
-          id: "act_weekly_notify",
-          type: "notify" as const,
-          trigger: "after" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          message: "{{result}}"
-        }
-      ]
-    }
-  },
-  {
-    id: "morning_weather",
-    name: "早晨天气",
-    description: "每天早上播报当日天气和穿衣建议",
-    category: "天气播报",
-    template: {
-      title: "早晨天气播报",
-      weekdays: [0, 1, 2, 3, 4, 5, 6], // 每天
-      time: "07:30",
-      actions: [
-        {
-          id: "act_weather_morning",
-          type: "ai_task" as const,
-          trigger: "at" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          prompt: "查询今天的天气情况，并根据天气给出穿衣和出行建议"
-        },
-        {
-          id: "act_weather_notify",
-          type: "notify" as const,
-          trigger: "after" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          message: "{{result}}"
-        }
-      ]
-    }
-  },
-  {
-    id: "travel_weather",
-    name: "出行天气",
-    description: "出门前15分钟提醒查看天气",
-    category: "天气播报", 
-    template: {
-      title: "出行天气提醒",
-      weekdays: [1, 2, 3, 4, 5], // 工作日
-      time: "08:45", // 假设9点出门
-      actions: [
-        {
-          id: "act_travel_weather",
-          type: "plugin" as const,
-          trigger: "at" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          toolName: "weather_query",
-          toolParams: { days: 1 }
-        },
-        {
-          id: "act_travel_notify",
-          type: "notify" as const,
-          trigger: "after" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          message: "出门前天气提醒：{{result}}"
-        }
-      ]
-    }
-  },
-  {
-    id: "simple_reminder",
-    name: "简单提醒",
-    description: "发送自定义提醒消息",
-    category: "提醒类",
-    template: {
-      title: "自定义提醒",
-      weekdays: [0, 1, 2, 3, 4, 5, 6],
-      time: "09:00",
-      actions: [
-        {
-          id: "act_simple_reminder",
-          type: "notify" as const,
-          trigger: "at" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          message: "这是一个自定义提醒，请修改消息内容"
-        }
-      ]
-    }
-  },
-  {
-    id: "scheduled_task",
-    name: "定时任务",
-    description: "执行AI任务并发送结果",
-    category: "提醒类",
-    template: {
-      title: "定时AI任务",
-      weekdays: [0, 1, 2, 3, 4, 5, 6],
-      time: "12:00",
-      actions: [
-        {
-          id: "act_scheduled_task",
-          type: "ai_task" as const,
-          trigger: "at" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          prompt: "执行定时任务，请修改具体的任务描述"
-        },
-        {
-          id: "act_task_notify",
-          type: "notify" as const,
-          trigger: "after" as const,
-          offsetMinutes: 0,
-          channel: "wechat" as const,
-          message: "{{result}}"
-        }
-      ]
-    }
-  }
-];
 
 interface RoutineAction {
   id: string;
@@ -245,7 +71,7 @@ interface DayPlanItem {
 }
 
 interface MemberDetail {
-  member: { id: string; name: string; role: string; avatar?: string; channelBindings: Record<string, string> };
+  member: { id: string; name: string; role: string; avatar?: string; channelBindings: Record<string, string>; wechatNotifyEnabled?: boolean };
   profile: string;
   routines: Routine[];
   plans?: Override[];
@@ -293,23 +119,6 @@ export function MembersPage() {
   const [memberNameDraft, setMemberNameDraft] = useState("");
   const [memberAvatarFile, setMemberAvatarFile] = useState<File | null>(null);
   const [memberAvatarPreview, setMemberAvatarPreview] = useState<string | null>(null);
-
-  // AI routine parsing
-  const [showAiInput, setShowAiInput] = useState(false);
-  const [aiDescription, setAiDescription] = useState("");
-  const [aiParsing, setAiParsing] = useState(false);
-  const [aiError, setAiError] = useState<string | null>(null);
-  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
-  
-  // 编辑模式：natural（自然语言） | structured（结构化） | template（模板选择）
-  const [editMode, setEditMode] = useState<"natural" | "structured" | "template">("natural");
-  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
-  const [showTemplates, setShowTemplates] = useState(false);
-
-  // Routine preview
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewRoutine, setPreviewRoutine] = useState<Routine | null>(null);
-  const [originalDescription, setOriginalDescription] = useState("");
 
   // Override editing
   const [editingOverride, setEditingOverride] = useState<Override | null>(null);
@@ -434,17 +243,92 @@ export function MembersPage() {
     setDeleting(null);
   }
 
+  function defaultTimeForSlot(slot?: string): string | undefined {
+    const defaults: Record<string, string> = { morning: "08:00", afternoon: "14:00", evening: "20:00" };
+    return slot ? defaults[slot] : undefined;
+  }
+
+  function getScheduledAiPrompt(routine: Routine): string {
+    const aiTask = routine.actions?.find((action) => action.type === "ai_task");
+    return asText(aiTask?.prompt ?? routine.description ?? routine.title);
+  }
+
+  function getScheduledNotifyMessage(routine: Routine): string {
+    const notify = routine.actions?.find((action) => action.type === "notify");
+    return asText(notify?.message ?? routine.reminders?.[0]?.message ?? "{{result}}");
+  }
+
+  function upsertRoutineActionDraft(routine: Routine, action: Partial<RoutineAction> & Pick<RoutineAction, "type">): Routine {
+    const actions = [...(routine.actions ?? [])];
+    const existingIndex = actions.findIndex((item) => item.type === action.type);
+    const existing = existingIndex >= 0 ? actions[existingIndex] : undefined;
+    const nextAction: RoutineAction = {
+      id: existing?.id ?? `${routine.id}_${action.type}`,
+      trigger: action.type === "notify" ? "after" : "at",
+      offsetMinutes: 0,
+      channel: "wechat",
+      ...existing,
+      ...action,
+    };
+
+    if (existingIndex >= 0) {
+      actions[existingIndex] = nextAction;
+    } else {
+      actions.push(nextAction);
+    }
+
+    return { ...routine, actions };
+  }
+
+  function normalizeRoutineForScheduledAi(routine: Routine): Routine {
+    const title = routine.title.trim() || "新习惯";
+    const prompt = getScheduledAiPrompt(routine).trim() || title;
+    const notifyMessage = getScheduledNotifyMessage(routine).trim() || "{{result}}";
+    const actionPrefix = routine.id || `rtn_${Date.now().toString(36)}`;
+    return {
+      id: routine.id,
+      title,
+      description: prompt,
+      assigneeMemberIds: routine.assigneeMemberIds,
+      weekdays: routine.weekdays,
+      time: routine.time ?? defaultTimeForSlot(routine.timeSlot),
+      reminders: [{
+        offsetMinutes: 0,
+        message: notifyMessage,
+        channel: "wechat",
+      }],
+      actions: [
+        {
+          id: `${actionPrefix}_ai_task`,
+          type: "ai_task",
+          trigger: "at",
+          offsetMinutes: 0,
+          channel: "wechat",
+          prompt,
+        },
+        {
+          id: `${actionPrefix}_notify`,
+          type: "notify",
+          trigger: "after",
+          offsetMinutes: 0,
+          channel: "wechat",
+          message: notifyMessage,
+        },
+      ],
+    };
+  }
+
   async function saveRoutine(routine: Routine) {
     if (!selectedId) return;
     try {
       setPageError(null);
+      const normalizedRoutine = normalizeRoutineForScheduledAi(routine);
       await fetch(`/api/routines/${selectedId}/${routine.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(routine),
+        body: JSON.stringify(normalizedRoutine),
       });
       setEditingRoutine(null);
-      setAiWarnings([]);
       await refreshMemberDetail(selectedId);
     } catch (err) {
       setPageError(err instanceof Error ? err.message : "保存习惯失败");
@@ -511,7 +395,7 @@ export function MembersPage() {
         await fetch(`/api/members/${selectedId}/apply-routines`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ routines: selected }),
+          body: JSON.stringify({ routines: selected.map(normalizeRoutineForScheduledAi) }),
         });
       }
       setGeneratedRoutines(null);
@@ -546,41 +430,6 @@ export function MembersPage() {
     }
   }
 
-  async function parseWithAi(descOverride?: unknown) {
-    const normalizedOverride = typeof descOverride === "string" ? descOverride : undefined;
-    const desc = asText(normalizedOverride ?? aiDescription);
-    if (!selectedId || !desc.trim() || aiParsing) return;
-    setAiParsing(true);
-    setAiError(null);
-    setAiWarnings([]);
-    try {
-      const res = await api.parseRoutine(selectedId, desc.trim());
-      if (res.ok && res.routine) {
-        const r = res.routine as unknown as Routine;
-        const processedRoutine = editingRoutine ? {
-          ...r,
-          id: editingRoutine.id,
-          title: asText(r.title || editingRoutine.title),
-          weekdays: Array.isArray(r.weekdays) ? r.weekdays : editingRoutine.weekdays,
-          description: desc.trim(),
-        } : r;
-
-        // Show preview instead of directly setting editingRoutine
-        setPreviewRoutine(processedRoutine);
-        setOriginalDescription(desc.trim());
-        setAiWarnings(res.warnings ?? []);
-        setShowPreview(true);
-        setShowAiInput(false);
-        setAiDescription("");
-      } else {
-        setAiError(res.error ?? "解析失败，请重试");
-      }
-    } catch (err) {
-      setAiError(err instanceof Error ? err.message : "请求失败");
-    }
-    setAiParsing(false);
-  }
-
   async function loadActionLogs() {
     if (!selectedId) return;
     try {
@@ -598,23 +447,6 @@ export function MembersPage() {
       void loadActionLogs();
     }
   }, [selectedId]);
-
-  function formatActionChain(actions: RoutineAction[]): string[] {
-    return actions.map((a) => {
-      const trigLabels: Record<string, string> = { before: "提前", at: "到时", after: "延后" };
-      const trigStr = a.trigger === "at" ? "到时" : `${trigLabels[a.trigger]}${a.offsetMinutes}分`;
-      switch (a.type) {
-        case "notify":
-          return `${trigStr} → 微信通知：「${a.message ?? ""}」`;
-        case "ai_task":
-          return `${trigStr} → AI 执行任务：${a.prompt ?? ""}`;
-        case "plugin":
-          return `${trigStr} → 调用插件工具：${a.toolName ?? ""}`;
-        default:
-          return `${trigStr} → ${a.type}`;
-      }
-    });
-  }
 
   function formatWeekdays(weekdays: number[]): string {
     return weekdays.map((d) => `周${WEEKDAY_NAMES[d]}`).join("、");
@@ -795,100 +627,30 @@ export function MembersPage() {
                     <h3 className="text-sm font-medium text-stone-500">
                       7 days · {detail.routines.length} 项习惯
                     </h3>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => { setShowAiInput(true); setAiDescription(""); setAiError(null); }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
-                      >
-                        + 新增习惯
-                      </button>
-                      <button
-                        onClick={() => {
-                          const newRoutine: Routine = {
-                            id: `rtn_${Date.now().toString(36)}`,
-                            title: "新习惯",
-                            description: "",
-                            weekdays: [0, 1, 2, 3, 4, 5, 6],
-                            time: "09:00",
-                            reminders: [],
-                            actions: [],
-                          };
-                          setEditingRoutine(newRoutine);
-                          setEditMode("template");
-                          setSelectedTemplate(null);
-                        }}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 transition-colors cursor-pointer"
-                      >
-                        📋 模板
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => {
+                        const newRoutine: Routine = {
+                          id: `rtn_${Date.now().toString(36)}`,
+                          title: "新习惯",
+                          description: "新习惯",
+                          weekdays: [0, 1, 2, 3, 4, 5, 6],
+                          time: "09:00",
+                          reminders: [],
+                          actions: [],
+                        };
+                        setEditingRoutine(normalizeRoutineForScheduledAi(newRoutine));
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
+                    >
+                      + 新增习惯
+                    </button>
                   </div>
-
-                  {/* AI smart input */}
-                  {showAiInput && (
-                    <div className="mb-4 p-4 rounded-lg border border-amber-200 bg-amber-50/30 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-medium text-stone-600">描述你的习惯，AI 会解析后显示预览供确认</p>
-                        <button
-                          onClick={() => setShowAiInput(false)}
-                          className="p-1 rounded text-stone-400 hover:text-stone-600 transition-colors"
-                        >
-                          <CloseIcon size="md" />
-                        </button>
-                      </div>
-                      <textarea
-                        value={aiDescription}
-                        onChange={(e) => setAiDescription(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) parseWithAi();
-                        }}
-                        placeholder={"例如：\n• 周一三五晚上7点去健身，提前半小时提醒带装备\n• 每天早上8点吃早餐，查一下当天天气\n• 每周日下午做一次大扫除"}
-                        rows={3}
-                        className="w-full px-3 py-2 rounded-lg border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
-                        disabled={aiParsing}
-                      />
-                      {aiError && (
-                        <p className="text-xs text-red-500">{aiError}</p>
-                      )}
-                      <div className="flex items-center justify-between">
-                        <button
-                          onClick={() => {
-                            setShowAiInput(false);
-                            setEditingRoutine({
-                              id: `rtn_${Date.now().toString(36)}`,
-                              title: "",
-                              weekdays: [],
-                              reminders: [],
-                              actions: [],
-                            });
-                          }}
-                          className="text-xs text-stone-400 hover:text-stone-600 transition-colors"
-                        >
-                          手动创建
-                        </button>
-                        <button
-                          onClick={() => { void parseWithAi(); }}
-                    disabled={!asText(aiDescription).trim() || aiParsing}
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
-                        >
-                          {aiParsing ? (
-                            <>
-                              <span className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" />
-                              AI 解析中…
-                            </>
-                          ) : (
-                            "AI 解析"
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
 
                   {detail.routines.length === 0 ? (
                     <div className="py-6 text-center space-y-3">
                       <p className="text-sm text-stone-400">暂无习惯</p>
                       <p className="text-xs text-stone-400">
-                        点击「+ 新增习惯」用自然语言描述，AI 帮你创建
+                        点击「+ 新增习惯」创建定时 AI 任务
                       </p>
                     </div>
                   ) : (
@@ -941,22 +703,12 @@ export function MembersPage() {
                                     navigate("/admin/family");
                                     return;
                                   }
-                                  const r = { ...routine };
-                                  if (!r.actions?.length && r.reminders.length > 0) {
-                                    r.actions = r.reminders.map((rem, i) => ({
-                                      id: `act_migrated_${i}`,
-                                      type: "notify" as const,
-                                      trigger: "before" as const,
-                                      offsetMinutes: rem.offsetMinutes,
-                                      channel: rem.channel,
-                                      message: rem.message,
-                                    }));
-                                  }
-                                  setEditingRoutine({
-                                    ...r,
-                                    title: asText(r.title),
-                                    description: asText(r.description),
-                                  });
+                                  setEditingRoutine(normalizeRoutineForScheduledAi({
+                                    ...routine,
+                                    title: asText(routine.title),
+                                    description: asText(routine.description),
+                                    time: routine.time ?? defaultTimeForSlot(routine.timeSlot) ?? "09:00",
+                                  }));
                                 }}
                                 className="p-1.5 rounded-md text-stone-400 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
                                 title="编辑"
@@ -1497,206 +1249,6 @@ export function MembersPage() {
         </div>
       )}
 
-      {/* AI Parsing Preview Dialog */}
-      {showPreview && previewRoutine && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowPreview(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6 border-b border-stone-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-stone-800 mb-1">AI解析结果预览</h3>
-                  <p className="text-sm text-stone-500">请检查解析结果是否符合预期，可以修改后再保存</p>
-                </div>
-                {/* Confidence indicator */}
-                {(previewRoutine as any)?.confidence !== undefined && (
-                  <div className="text-right">
-                    <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${
-                      (previewRoutine as any).confidence >= 0.8 
-                        ? "bg-green-100 text-green-700"
-                        : (previewRoutine as any).confidence >= 0.6
-                        ? "bg-yellow-100 text-yellow-700"  
-                        : "bg-red-100 text-red-700"
-                    }`}>
-                      <span className={`w-2 h-2 rounded-full ${
-                        (previewRoutine as any).confidence >= 0.8 
-                          ? "bg-green-500"
-                          : (previewRoutine as any).confidence >= 0.6
-                          ? "bg-yellow-500"
-                          : "bg-red-500"
-                      }`} />
-                      置信度: {((previewRoutine as any).confidence * 100).toFixed(0)}%
-                    </div>
-                    <p className="text-xs text-stone-400 mt-1">
-                      {(previewRoutine as any).confidence >= 0.8 
-                        ? "解析质量良好" 
-                        : (previewRoutine as any).confidence >= 0.6
-                        ? "建议检查调整"
-                        : "需要仔细检查"}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="p-6 max-h-[calc(90vh-200px)] overflow-y-auto">
-              <div className="space-y-6">
-                {/* Original description */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-2">原始描述</label>
-                  <div className="px-3 py-2 rounded-lg bg-stone-50 border border-stone-200 text-sm text-stone-700">
-                    {originalDescription}
-                  </div>
-                </div>
-
-                {/* Parsed results */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-stone-500 mb-2">习惯名称</label>
-                    <input
-                      type="text"
-                      value={previewRoutine.title}
-                      onChange={(e) => setPreviewRoutine({ ...previewRoutine, title: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-stone-500 mb-2">执行时间</label>
-                    <input
-                      type="time"
-                      value={previewRoutine.time || ""}
-                      onChange={(e) => setPreviewRoutine({ ...previewRoutine, time: e.target.value || undefined })}
-                      className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                    />
-                  </div>
-                </div>
-
-                {/* Weekdays */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-2">重复周期</label>
-                  <div className="flex gap-2">
-                    {[0, 1, 2, 3, 4, 5, 6].map((d) => (
-                      <button
-                        key={d}
-                        onClick={() => {
-                          const wds = previewRoutine.weekdays.includes(d)
-                            ? previewRoutine.weekdays.filter((x) => x !== d)
-                            : [...previewRoutine.weekdays, d].sort();
-                          setPreviewRoutine({ ...previewRoutine, weekdays: wds });
-                        }}
-                        className={`w-9 h-9 rounded-full text-sm font-medium transition-colors ${
-                          previewRoutine.weekdays.includes(d)
-                            ? "bg-amber-500 text-white"
-                            : "bg-stone-100 text-stone-400 hover:bg-stone-200"
-                        }`}
-                      >
-                        {WEEKDAY_NAMES[d]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Action chain preview */}
-                {(previewRoutine.actions ?? []).length > 0 && (
-                  <div>
-                    <label className="block text-xs font-medium text-stone-500 mb-2">执行链路预览</label>
-                    <div className="space-y-2">
-                      {formatActionChain(previewRoutine.actions ?? []).map((line, i) => {
-                        const action = previewRoutine.actions![i]!;
-                        const colors: Record<string, string> = {
-                          notify: "border-l-blue-400 bg-blue-50/50",
-                          plugin: "border-l-teal-400 bg-teal-50/50",
-                          ai_task: "border-l-purple-400 bg-purple-50/50",
-                        };
-                        const icons: Record<string, string> = { notify: "🔔", plugin: "🔧", ai_task: "🤖" };
-                        return (
-                          <div key={i} className={`px-3 py-2 rounded-r-lg border-l-3 text-xs text-stone-700 ${colors[action.type] ?? "border-l-stone-300 bg-stone-50"}`}>
-                            <span className="mr-2">{icons[action.type]}</span>
-                            {line}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <p className="text-xs text-stone-400 mt-2">
-                      💡 执行顺序：AI任务先执行，然后发送通知给用户
-                    </p>
-                  </div>
-                )}
-
-                {/* Warnings */}
-                {aiWarnings.length > 0 && (
-                  <div className="p-4 rounded-lg bg-yellow-50 border border-yellow-200">
-                    <h4 className="text-sm font-medium text-yellow-800 mb-2">解析提醒</h4>
-                    <div className="space-y-1">
-                      {aiWarnings.map((w, i) => (
-                        <p key={i} className="text-xs text-yellow-700 flex items-start gap-1.5">
-                          <span className="mt-0.5 flex-shrink-0">⚠️</span>
-                          {w}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-stone-200 bg-stone-50 flex justify-between items-center">
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    setShowPreview(false);
-                    setShowAiInput(true);
-                    setAiDescription(originalDescription);
-                  }}
-                  className="px-4 py-2 rounded-lg text-sm text-amber-600 bg-amber-50 hover:bg-amber-100 transition-colors"
-                >
-                  重新解析
-                </button>
-                <button
-                  onClick={() => setShowPreview(false)}
-                  className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors"
-                >
-                  取消
-                </button>
-              </div>
-              
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    // Apply preview to editing routine and close preview
-                    setEditingRoutine(previewRoutine);
-                    setShowPreview(false);
-                    setAiWarnings(aiWarnings); // Keep warnings for main editor
-                  }}
-                  className="px-4 py-2 rounded-lg text-sm text-stone-700 bg-stone-200 hover:bg-stone-300 transition-colors"
-                >
-                  继续编辑
-                </button>
-                <button
-                  onClick={async () => {
-                    // Save directly from preview
-                    if (selectedId && previewRoutine) {
-                      try {
-                        await saveRoutine(previewRoutine);
-                        setShowPreview(false);
-                        setPreviewRoutine(null);
-                        setOriginalDescription("");
-                        setAiWarnings([]);
-                      } catch (err) {
-                        // Error handling is done in saveRoutine
-                      }
-                    }
-                  }}
-                  className="px-4 py-2 rounded-lg bg-green-500 text-white text-sm font-medium hover:bg-green-600 transition-colors"
-                >
-                  直接保存
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Delete member confirmation dialog */}
       {deleting && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setDeleting(null)}>
@@ -1751,149 +1303,71 @@ export function MembersPage() {
 
       {/* Edit routine dialog */}
       {editingRoutine && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => { setEditingRoutine(null); setAiWarnings([]); }}>
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingRoutine(null)}>
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-stone-800 mb-4">
               {detail?.routines.some((r) => r.id === editingRoutine.id) ? "编辑 7 days 习惯" : "新增 7 days 习惯"}
             </h3>
-            
-            {/* 模式切换器 */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-medium text-stone-600">配置方式</p>
-                <div className="flex rounded-lg bg-stone-100 p-1">
-                  <button
-                    onClick={() => setEditMode("template")}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                      editMode === "template"
-                        ? "bg-white text-amber-700 shadow-sm"
-                        : "text-stone-600 hover:text-stone-800"
-                    }`}
-                  >
-                    模板
-                  </button>
-                  <button
-                    onClick={() => setEditMode("natural")}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                      editMode === "natural"
-                        ? "bg-white text-amber-700 shadow-sm"
-                        : "text-stone-600 hover:text-stone-800"
-                    }`}
-                  >
-                    自然语言
-                  </button>
-                  <button
-                    onClick={() => setEditMode("structured")}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                      editMode === "structured"
-                        ? "bg-white text-amber-700 shadow-sm"
-                        : "text-stone-600 hover:text-stone-800"
-                    }`}
-                  >
-                    结构化
-                  </button>
-                </div>
-              </div>
-              <p className="text-xs text-stone-500">
-                {editMode === "template" 
-                  ? "选择预设模板快速创建常用习惯"
-                  : editMode === "natural" 
-                  ? "用自然语言描述，AI 自动生成配置" 
-                  : "手动配置每个执行步骤和参数"
-                }
-              </p>
-            </div>
-            
-            {editMode === "template" ? (
-              // 模板选择模式
-              <div className="space-y-4">
-                <div className="grid gap-3">
-                  {Object.entries(
-                    SCENARIO_TEMPLATES.reduce((groups, template) => {
-                      const category = template.category;
-                      if (!groups[category]) groups[category] = [];
-                      groups[category].push(template);
-                      return groups;
-                    }, {} as Record<string, typeof SCENARIO_TEMPLATES>)
-                  ).map(([category, templates]) => (
-                    <div key={category}>
-                      <h4 className="text-sm font-medium text-stone-700 mb-2">{category}</h4>
-                      <div className="grid grid-cols-1 gap-2">
-                        {templates.map((template) => (
-                          <button
-                            key={template.id}
-                            onClick={() => {
-                              // 应用模板到当前编辑的习惯
-                              setEditingRoutine({
-                                ...editingRoutine,
-                                ...template.template,
-                                id: editingRoutine.id, // 保持原有ID
-                                description: editingRoutine.description, // 保持原有描述
-                              });
-                              setSelectedTemplate(template.id);
-                            }}
-                            className={`p-3 rounded-lg border text-left transition-colors ${
-                              selectedTemplate === template.id
-                                ? "border-amber-500 bg-amber-50"
-                                : "border-stone-200 hover:border-stone-300 hover:bg-stone-50"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-1">
-                              <h5 className="text-sm font-medium text-stone-800">{template.name}</h5>
-                              {selectedTemplate === template.id && (
-                                <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
-                                  已选择
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-xs text-stone-500">{template.description}</p>
-                            <div className="flex items-center gap-2 mt-2">
-                              <span className="text-xs text-stone-400">
-                                {template.template.weekdays.map(d => WEEKDAY_NAMES[d]).join("、")}
-                              </span>
-                              {template.template.time && (
-                                <span className="text-xs text-stone-400">
-                                  {template.template.time}
-                                </span>
-                              )}
-                              <span className="text-xs text-stone-400">
-                                {template.template.actions?.length || 0}个步骤
-                              </span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {selectedTemplate && (
-                  <div className="p-4 rounded-lg border border-green-200 bg-green-50/30">
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-sm font-medium text-green-800">模板已应用</h4>
-                      <button
-                        onClick={() => setEditMode("natural")}
-                        className="text-xs text-green-600 hover:text-green-700 font-medium"
-                      >
-                        继续编辑 →
-                      </button>
-                    </div>
-                    <p className="text-xs text-green-700">
-                      可以切换到其他模式进行个性化调整，或直接保存使用当前配置。
-                    </p>
-                  </div>
-                )}
-              </div>
-            ) : editMode === "natural" ? (
-              // 自然语言模式
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-1">名称</label>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-1">名称</label>
                 <input
                   type="text"
                   value={editingRoutine.title}
-                  onChange={(e) => setEditingRoutine({ ...editingRoutine, title: e.target.value })}
+                  onChange={(e) => {
+                    const nextTitle = e.target.value;
+                    const currentPrompt = getScheduledAiPrompt(editingRoutine);
+                    const nextRoutine = { ...editingRoutine, title: nextTitle };
+                    setEditingRoutine(
+                      !currentPrompt.trim() || currentPrompt === editingRoutine.title
+                        ? upsertRoutineActionDraft(nextRoutine, {
+                            type: "ai_task",
+                            trigger: "at",
+                            offsetMinutes: 0,
+                            channel: "wechat",
+                            prompt: nextTitle,
+                          })
+                        : nextRoutine,
+                    );
+                  }}
                   className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-1">AI 任务内容</label>
+                <textarea
+                  value={getScheduledAiPrompt(editingRoutine)}
+                  onChange={(e) => {
+                    setEditingRoutine(upsertRoutineActionDraft(editingRoutine, {
+                      type: "ai_task",
+                      trigger: "at",
+                      offsetMinutes: 0,
+                      channel: "wechat",
+                      prompt: e.target.value,
+                    }));
+                  }}
+                  rows={3}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-stone-500 mb-1">微信通知内容</label>
+                <textarea
+                  value={getScheduledNotifyMessage(editingRoutine)}
+                  onChange={(e) => {
+                    setEditingRoutine(upsertRoutineActionDraft(editingRoutine, {
+                      type: "notify",
+                      trigger: "after",
+                      offsetMinutes: 0,
+                      channel: "wechat",
+                      message: e.target.value,
+                    }));
+                  }}
+                  rows={2}
+                  placeholder="{{result}}"
+                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
                 />
               </div>
 
@@ -1928,170 +1402,34 @@ export function MembersPage() {
                   value={editingRoutine.time ?? ""}
                   onChange={(e) => setEditingRoutine({ ...editingRoutine, time: e.target.value || undefined })}
                   className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400 focus:bg-white transition-all [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                  required
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">习惯描述</label>
-                <textarea
-                  value={asText(editingRoutine.description)}
-                  onChange={(e) => setEditingRoutine({ ...editingRoutine, description: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && asText(editingRoutine.description).trim()) {
-                      parseWithAi(asText(editingRoutine.description));
-                    }
-                  }}
-                  placeholder={"用自然语言描述这个习惯，AI 会自动识别执行方式\n例如：告诉我明天的天气预报、提前半小时提醒带健身装备"}
-                  rows={3}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
-                  disabled={aiParsing}
-                />
-                <div className="flex items-center justify-between mt-2">
-                  <p className="text-[11px] text-stone-400">Cmd+Enter 快速解析</p>
-                  <button
-                    onClick={() => parseWithAi(asText(editingRoutine.description))}
-                    disabled={!asText(editingRoutine.description).trim() || aiParsing}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
-                  >
-                    {aiParsing ? (
-                      <>
-                        <span className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" />
-                        解析中…
-                      </>
-                    ) : (
-                      "AI 解析"
-                    )}
-                  </button>
-                </div>
-                {aiError && (
-                  <p className="text-xs text-red-500 mt-1">{aiError}</p>
-                )}
+              <div className="p-3 rounded-lg bg-stone-50 border border-stone-200">
+                <p className="text-xs text-stone-500">
+                  通知内容可使用 {"{{result}}"} 引用 AI 任务返回内容。
+                </p>
               </div>
-
-              {aiWarnings.length > 0 && (
-                <div className="p-3 rounded-lg bg-yellow-50 border border-yellow-200">
-                  {aiWarnings.map((w, i) => (
-                    <p key={i} className="text-xs text-yellow-700 flex items-start gap-1.5">
-                      <span className="mt-0.5 flex-shrink-0">⚠️</span>
-                      {w}
-                    </p>
-                  ))}
-                </div>
-              )}
-
-              {(editingRoutine.actions ?? []).length > 0 && (
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-2">执行链路</label>
-                  <div className="space-y-1.5">
-                    {formatActionChain(editingRoutine.actions ?? []).map((line, i) => {
-                      const action = editingRoutine.actions![i]!;
-                      const colors: Record<string, string> = {
-                        notify: "border-l-blue-400 bg-blue-50/50",
-                        plugin: "border-l-teal-400 bg-teal-50/50",
-                        ai_task: "border-l-purple-400 bg-purple-50/50",
-                      };
-                      const icons: Record<string, string> = { notify: "🔔", plugin: "🔧", ai_task: "🤖" };
-                      return (
-                        <div key={i} className={`px-3 py-2 rounded-r-lg border-l-3 text-xs text-stone-700 ${colors[action.type] ?? "border-l-stone-300 bg-stone-50"}`}>
-                          <span className="mr-1">{icons[action.type]}</span>
-                          {line}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[11px] text-stone-400 mt-1.5">通知会发送到微信，执行结果可在下方“最近执行记录”查看</p>
-                </div>
-              )}
-              </div>
-            ) : (
-              // 结构化配置模式 - 简化版本，先实现基础功能
-              <div className="space-y-4">
-                {/* 基本信息 */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-1">名称</label>
-                  <input
-                    type="text"
-                    value={editingRoutine.title}
-                    onChange={(e) => setEditingRoutine({ ...editingRoutine, title: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-2">每周重复</label>
-                  <div className="flex gap-2">
-                    {[0, 1, 2, 3, 4, 5, 6].map((d) => (
-                      <button
-                        key={d}
-                        onClick={() => {
-                          const wds = editingRoutine.weekdays.includes(d)
-                            ? editingRoutine.weekdays.filter((x) => x !== d)
-                            : [...editingRoutine.weekdays, d].sort();
-                          setEditingRoutine({ ...editingRoutine, weekdays: wds });
-                        }}
-                        className={`w-9 h-9 rounded-full text-sm font-medium transition-colors ${
-                          editingRoutine.weekdays.includes(d)
-                            ? "bg-amber-500 text-white"
-                            : "bg-stone-100 text-stone-400 hover:bg-stone-200"
-                        }`}
-                      >
-                        {WEEKDAY_NAMES[d]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-1">具体时间</label>
-                  <input
-                    type="time"
-                    value={editingRoutine.time ?? ""}
-                    onChange={(e) => setEditingRoutine({ ...editingRoutine, time: e.target.value || undefined })}
-                    className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400 focus:bg-white transition-all [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
-                  />
-                </div>
-
-                {/* 简化的Actions配置 */}
-                <div className="p-4 rounded-lg border border-amber-200 bg-amber-50/30">
-                  <div className="flex items-center justify-between mb-3">
-                    <h4 className="text-sm font-medium text-stone-700">执行步骤配置</h4>
-                    <span className="text-xs text-amber-600 bg-amber-100 px-2 py-1 rounded-full">高级功能</span>
-                  </div>
-                  <p className="text-xs text-stone-600 mb-3">
-                    结构化配置模式正在完善中，当前推荐使用自然语言模式进行配置。
-                  </p>
-                  <button
-                    onClick={() => setEditMode("natural")}
-                    className="text-xs text-amber-600 hover:text-amber-700 font-medium"
-                  >
-                    切换到自然语言模式 →
-                  </button>
-                </div>
-              </div>
-            )}
+            </div>
 
             <div className="flex justify-end gap-3 mt-6">
               <button
-                onClick={() => { setEditingRoutine(null); setAiWarnings([]); }}
+                onClick={() => setEditingRoutine(null)}
                 className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors cursor-pointer"
               >
                 取消
               </button>
               <button
-                onClick={() => {
-                  const toSave = { ...editingRoutine };
-                  if (toSave.actions?.length) {
-                    toSave.reminders = toSave.actions
-                      .filter((a) => a.type === "notify")
-                      .map((a) => ({
-                        offsetMinutes: a.trigger === "before" ? a.offsetMinutes : 0,
-                        message: a.message ?? "",
-                        channel: "wechat",
-                      }));
-                  }
-                  saveRoutine(toSave);
-                }}
-                className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors cursor-pointer"
+                onClick={() => saveRoutine(editingRoutine)}
+                disabled={
+                  !editingRoutine.title.trim()
+                  || !getScheduledAiPrompt(editingRoutine).trim()
+                  || !getScheduledNotifyMessage(editingRoutine).trim()
+                  || editingRoutine.weekdays.length === 0
+                  || !editingRoutine.time
+                }
+                className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors cursor-pointer"
               >
                 保存
               </button>
