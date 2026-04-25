@@ -1,5 +1,5 @@
 import { createProvider } from "@nichijou/ai";
-import type { LLMProvider } from "@nichijou/ai";
+import type { ChatRequest, LLMProvider, StreamEvent } from "@nichijou/ai";
 import { 
   MultimodalProviderSelector, 
   createWhisperService,
@@ -43,6 +43,7 @@ import { resolvePluginImportUrl } from "./plugins/resolve-plugin.js";
 import { ActionExecutor } from "./routine/action-executor.js";
 import { ModelManager } from "./services/model-manager.js";
 import { ErrorHandler } from "./services/error-handler.js";
+import { SystemLogger } from "./services/system-logger.js";
 import type { AgentContext } from "./types/agent.js";
 
 interface WeChatConnection {
@@ -78,6 +79,7 @@ export class ButlerService {
   readonly pluginHost: PluginHost;
   readonly actionExecutor: ActionExecutor;
   readonly modelManager: ModelManager;
+  readonly systemLogger: SystemLogger;
 
   private provider: LLMProvider | null = null;
   private sessions = new Map<string, AgentSession>();
@@ -90,13 +92,15 @@ export class ButlerService {
     this.storage = new StorageManager(dataDir);
     this.config = new ConfigManager(this.storage);
     this.db = new Database(this.storage);
+    this.systemLogger = new SystemLogger(this.db);
+    this.systemLogger.installConsoleCapture();
     this.familyManager = new FamilyManager(this.storage);
     this.routineEngine = new RoutineEngine(this.storage);
     this.gateway = new Gateway(this.familyManager);
     this.reminderScheduler = new ReminderScheduler(this.db, this.gateway);
     this.activityReminderScheduler = new ActivityReminderScheduler(this.db, this.gateway, this.familyManager);
     this.pluginHost = new PluginHost(this.storage);
-    this.modelManager = new ModelManager(this.config);
+    this.modelManager = new ModelManager(this.config, (provider) => this.wrapProviderWithLogging(provider));
     this.actionExecutor = new ActionExecutor(
       this.routineEngine, this.familyManager, this.pluginHost,
       this.gateway, null, this.db, this.config,
@@ -185,7 +189,7 @@ export class ButlerService {
     if (context?.preferredModelId) {
       const model = this.modelManager.getModelById(context.preferredModelId);
       if (model && model.enabled) {
-        return createProvider({
+        return this.wrapProviderWithLogging(createProvider({
           provider: model.provider,
           baseUrl: model.baseUrl,
           apiKey: model.apiKey,
@@ -193,7 +197,7 @@ export class ButlerService {
           timeout: model.timeout,
           thinkingMode: model.thinkingMode,
           timeZone,
-        });
+        }));
       }
     }
 
@@ -201,7 +205,7 @@ export class ButlerService {
     if (context?.agentId) {
       const agentModel = this.modelManager.getModelForAgent(context.agentId);
       if (agentModel && agentModel.enabled) {
-        return createProvider({
+        return this.wrapProviderWithLogging(createProvider({
           provider: agentModel.provider,
           baseUrl: agentModel.baseUrl,
           apiKey: agentModel.apiKey,
@@ -209,7 +213,7 @@ export class ButlerService {
           timeout: agentModel.timeout,
           thinkingMode: agentModel.thinkingMode,
           timeZone,
-        });
+        }));
       }
     }
 
@@ -217,7 +221,7 @@ export class ButlerService {
     const activeModel = this.modelManager.getActiveModel();
     if (activeModel && activeModel.enabled) {
       if (!this.provider) {
-        this.provider = createProvider({
+        this.provider = this.wrapProviderWithLogging(createProvider({
           provider: activeModel.provider,
           baseUrl: activeModel.baseUrl,
           apiKey: activeModel.apiKey,
@@ -225,7 +229,7 @@ export class ButlerService {
           timeout: activeModel.timeout,
           thinkingMode: activeModel.thinkingMode,
           timeZone,
-        });
+        }));
         this.actionExecutor.setProvider(this.provider);
       }
       return this.provider;
@@ -234,10 +238,131 @@ export class ButlerService {
     // 回退到旧的配置格式（向后兼容）
     if (!this.provider) {
       const cfg = this.config.get();
-      this.provider = createProvider({ ...cfg.llm, timeZone });
+      this.provider = this.wrapProviderWithLogging(createProvider({ ...cfg.llm, timeZone }));
       this.actionExecutor.setProvider(this.provider);
     }
     return this.provider;
+  }
+
+  wrapProviderWithLogging(provider: LLMProvider): LLMProvider {
+    const logger = this.systemLogger;
+    const fullLogOptions = {
+      fullPayload: true,
+      maxJsonLength: null,
+      maxStringLength: null,
+    };
+    const buildLogInput = async (request: ChatRequest, stream: boolean) => {
+      const maybeProvider = provider as unknown as {
+        buildRequestBody?: (request: ChatRequest, stream: boolean) => Promise<Record<string, unknown>>;
+      };
+      if (!maybeProvider.buildRequestBody) {
+        return { config: provider.config, request };
+      }
+      try {
+        return {
+          config: provider.config,
+          request,
+          apiRequestBody: await maybeProvider.buildRequestBody(request, stream),
+        };
+      } catch (error) {
+        return {
+          config: provider.config,
+          request,
+          apiRequestBodyError: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+
+    return {
+      get config() {
+        return provider.config;
+      },
+
+      async chat(request: ChatRequest) {
+        const traceId = logger.createTraceId("llm");
+        const startedAt = Date.now();
+        const input = await buildLogInput(request, false);
+        logger.logRuntime({
+          source: "LLM.api",
+          message: "LLM API chat started",
+          input,
+          traceId,
+          ...fullLogOptions,
+        });
+
+        try {
+          const response = await provider.chat(request);
+          logger.logRuntime({
+            source: "LLM.api",
+            message: "LLM API chat completed",
+            input,
+            output: response,
+            durationMs: Date.now() - startedAt,
+            traceId,
+            ...fullLogOptions,
+          });
+          return response;
+        } catch (error) {
+          logger.logError({
+            source: "LLM.api",
+            message: "LLM API chat failed",
+            input,
+            error,
+            durationMs: Date.now() - startedAt,
+            traceId,
+            ...fullLogOptions,
+          });
+          throw error;
+        }
+      },
+
+      async *chatStream(request: ChatRequest): AsyncIterable<StreamEvent> {
+        const traceId = logger.createTraceId("llm_stream");
+        const startedAt = Date.now();
+        const events: StreamEvent[] = [];
+        const input = await buildLogInput(request, true);
+        logger.logRuntime({
+          source: "LLM.api",
+          message: "LLM API stream started",
+          input,
+          traceId,
+          ...fullLogOptions,
+        });
+
+        try {
+          for await (const event of provider.chatStream(request)) {
+            events.push(event);
+            yield event;
+          }
+
+          const doneEvent = [...events].reverse().find((event) => event.type === "done");
+          logger.logRuntime({
+            source: "LLM.api",
+            message: "LLM API stream completed",
+            input,
+            output: {
+              events,
+              final: doneEvent,
+            },
+            durationMs: Date.now() - startedAt,
+            traceId,
+            ...fullLogOptions,
+          });
+        } catch (error) {
+          logger.logError({
+            source: "LLM.api",
+            message: "LLM API stream failed",
+            input,
+            output: { events },
+            error,
+            durationMs: Date.now() - startedAt,
+            traceId,
+            ...fullLogOptions,
+          });
+          throw error;
+        }
+      },
+    };
   }
 
   refreshProvider(): void {
@@ -279,6 +404,72 @@ export class ButlerService {
       ...this.createDebugTools(), // 添加调试工具
       ...this.pluginHost.getAllTools(),
     ];
+  }
+
+  private recordAgentEventLog(
+    event: AgentEvent,
+    context: {
+      flow: string;
+      memberId: string;
+      traceId: string;
+      toolStarts: Map<string, number[]>;
+    },
+  ): void {
+    if (event.type === "tool_start") {
+      const starts = context.toolStarts.get(event.toolName) ?? [];
+      starts.push(Date.now());
+      context.toolStarts.set(event.toolName, starts);
+      this.systemLogger.logRuntime({
+        source: "Agent.tool",
+        message: "Tool call started",
+        input: { toolName: event.toolName, params: event.params },
+        details: { flow: context.flow, memberId: context.memberId },
+        traceId: context.traceId,
+      });
+      return;
+    }
+
+    if (event.type === "tool_end") {
+      const starts = context.toolStarts.get(event.toolName) ?? [];
+      const startedAt = starts.shift();
+      context.toolStarts.set(event.toolName, starts);
+      const payload = {
+        source: "Agent.tool",
+        message: event.isError ? "Tool call failed" : "Tool call completed",
+        input: { toolName: event.toolName },
+        output: { result: event.result },
+        details: { flow: context.flow, memberId: context.memberId },
+        durationMs: startedAt ? Date.now() - startedAt : undefined,
+        traceId: context.traceId,
+      };
+      if (event.isError) {
+        this.systemLogger.logError({ ...payload, error: { message: event.result } });
+      } else {
+        this.systemLogger.logRuntime(payload);
+      }
+      return;
+    }
+
+    if (event.type === "turn_end") {
+      this.systemLogger.logRuntime({
+        source: "Agent.turn",
+        message: "Agent turn ended",
+        output: { message: event.message },
+        details: { flow: context.flow, memberId: context.memberId, usage: event.usage },
+        traceId: context.traceId,
+      });
+      return;
+    }
+
+    if (event.type === "error") {
+      this.systemLogger.logError({
+        source: "Agent.loop",
+        message: "Agent loop emitted error",
+        details: { flow: context.flow, memberId: context.memberId },
+        error: event.error,
+        traceId: context.traceId,
+      });
+    }
   }
 
   private refreshSessionTools(session: AgentSession): void {
@@ -851,8 +1042,15 @@ ${conversationText}
    * 执行记忆清理任务
    */
   private performMemoryCleanup(): void {
+    const traceId = this.systemLogger.createTraceId("cleanup");
+    const startedAt = Date.now();
     try {
       console.log('[MemoryManager] 开始执行记忆清理任务');
+      this.systemLogger.logRuntime({
+        source: "MemoryManager",
+        message: "Scheduled cleanup started",
+        traceId,
+      });
 
       // 只清理已被长期摘要覆盖的30天前聊天记录
       this.db.cleanOldChats(30);
@@ -875,9 +1073,28 @@ ${conversationText}
       // 清理60天前的执行日志
       this.db.cleanOldActionExecutionLogs(60);
 
+      // 清理90天前的系统日志，并按类型各保留最新10000条
+      this.db.cleanOldSystemLogs("all", 90);
+      this.db.cleanExcessSystemLogs("runtime", 10000);
+      this.db.cleanExcessSystemLogs("error", 10000);
+
       console.log('[MemoryManager] 记忆清理任务完成');
+      this.systemLogger.logRuntime({
+        source: "MemoryManager",
+        message: "Scheduled cleanup completed",
+        output: { ok: true },
+        durationMs: Date.now() - startedAt,
+        traceId,
+      });
     } catch (error) {
       console.error('[MemoryManager] 记忆清理任务失败', error);
+      this.systemLogger.logError({
+        source: "MemoryManager",
+        message: "Scheduled cleanup failed",
+        error,
+        durationMs: Date.now() - startedAt,
+        traceId,
+      });
     }
   }
 
@@ -1351,7 +1568,7 @@ ${conversationText}
    * Chat with logging. Returns the FULL response (for dashboard use).
    * For WeChat, use handleMessage which extracts only the final reply.
    */
-  async chat(memberId: string, input: string, onEvent?: (event: AgentEvent) => void): Promise<string> {
+  async chat(memberId: string, input: string, onEvent?: (event: AgentEvent) => void, traceId?: string): Promise<string> {
     // 设置当前成员ID供工具使用
     this.currentMemberId = memberId;
 
@@ -1363,21 +1580,50 @@ ${conversationText}
     this.refreshSessionTools(session);
     
     const model = this.config.get().llm.model;
+    const activeTraceId = traceId ?? this.systemLogger.createTraceId("chat");
+    const startedAt = Date.now();
+    const events: Array<{ type: string; data: unknown }> = [];
+    const toolStarts = new Map<string, number[]>();
+
+    this.systemLogger.logRuntime({
+      source: "Butler.chat",
+      message: "Dashboard chat started",
+      input: { memberId, message: input },
+      details: { model },
+      traceId: activeTraceId,
+    });
 
     const unsub = session.subscribe((event) => {
+      events.push({ type: event.type, data: event });
+      this.recordAgentEventLog(event, {
+        flow: "dashboard_chat",
+        memberId,
+        traceId: activeTraceId,
+        toolStarts,
+      });
       if (event.type === "turn_end" && event.usage) {
         this.db.logTokenUsage(memberId, event.usage.promptTokens, event.usage.completionTokens, model);
       }
     });
 
+    let unsubExternal: (() => void) | undefined;
     if (onEvent) {
-      session.subscribe(onEvent);
+      unsubExternal = session.subscribe(onEvent);
     }
 
     try {
       const response = await session.prompt(input);
       this.db.saveChat(memberId, "user", input);
       this.db.saveChat(memberId, "assistant", response);
+      this.db.saveConversationLogWithMedia(
+        memberId,
+        member?.name ?? memberId,
+        input,
+        response,
+        JSON.stringify(events),
+        [],
+        [],
+      );
       
       // 智能上下文长度管理
       try {
@@ -1385,10 +1631,32 @@ ${conversationText}
       } catch (error) {
         console.error(`[ContextManager] 上下文管理失败，memberId: ${memberId}`, error);
       }
+
+      this.systemLogger.logRuntime({
+        source: "Butler.chat",
+        message: "Dashboard chat completed",
+        input: { memberId, message: input },
+        output: { response },
+        details: { model, eventCount: events.length },
+        durationMs: Date.now() - startedAt,
+        traceId: activeTraceId,
+      });
       
       return response;
+    } catch (error) {
+      this.systemLogger.logError({
+        source: "Butler.chat",
+        message: "Dashboard chat failed",
+        input: { memberId, message: input },
+        details: { model, eventCount: events.length },
+        error,
+        durationMs: Date.now() - startedAt,
+        traceId: activeTraceId,
+      });
+      throw error;
     } finally {
       unsub();
+      unsubExternal?.();
     }
   }
 
@@ -1753,6 +2021,21 @@ ${conversationText}
     // Start typing indicator
     await this.startTyping(member.id);
 
+    const traceId = this.systemLogger.createTraceId("wechat");
+    const startedAt = Date.now();
+    this.systemLogger.logRuntime({
+      source: "Butler.handleMessage",
+      message: "Inbound member message received",
+      input: {
+        memberId: member.id,
+        memberName: member.name,
+        text: msg.text,
+        mediaCount: msg.mediaContent?.length ?? 0,
+        referenceCount: msg.references?.length ?? 0,
+      },
+      traceId,
+    });
+
     const session = this.getOrCreateSession(member.id);
     
     // 统一系统提示刷新机制：每轮对话前更新系统提示
@@ -1760,16 +2043,48 @@ ${conversationText}
     session.updateSystemPrompt(this.buildSystemPrompt(member));
 
     // 构建包含多媒体上下文的消息
-    let { message: enhancedMessage, processedMedia: pipelineProcessed } = await this.buildEnhancedMessage(
-      msg,
-    );
+    const mediaStartedAt = Date.now();
+    let enhancedMessage = "";
+    let pipelineProcessed: ProcessedMediaInfo[] = [];
+    try {
+      const builtMessage = await this.buildEnhancedMessage(msg);
+      enhancedMessage = builtMessage.message;
+      pipelineProcessed = builtMessage.processedMedia;
+    } catch (error) {
+      this.systemLogger.logError({
+        source: "Butler.handleMessage",
+        message: "Enhanced message build failed",
+        input: { text: msg.text, mediaContent: msg.mediaContent, references: msg.references },
+        error,
+        durationMs: Date.now() - mediaStartedAt,
+        traceId,
+      });
+      await this.stopTyping(member.id);
+      await this.sendErrorMessage(member, error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    this.systemLogger.logRuntime({
+      source: "Butler.handleMessage",
+      message: "Enhanced message built",
+      input: { text: msg.text, mediaContent: msg.mediaContent, references: msg.references },
+      output: { enhancedMessage, processedMedia: pipelineProcessed },
+      durationMs: Date.now() - mediaStartedAt,
+      traceId,
+    });
 
     const events: Array<{ type: string; data: unknown }> = [];
+    const toolStarts = new Map<string, number[]>();
     let lastTurnText = "";
     const model = this.config.get().llm.model;
 
     const unsubscribe = session.subscribe((event) => {
       events.push({ type: event.type, data: event });
+      this.recordAgentEventLog(event, {
+        flow: "wechat_message",
+        memberId: member.id,
+        traceId,
+        toolStarts,
+      });
       if (event.type === "turn_end") {
         if (event.message.content) lastTurnText = event.message.content;
         if (event.usage) {
@@ -1785,6 +2100,15 @@ ${conversationText}
       await this.stopTyping(member.id);
       
       const error = err instanceof Error ? err : new Error(String(err));
+      this.systemLogger.logError({
+        source: "Butler.handleMessage",
+        message: "LLM prompt failed",
+        input: { memberId: member.id, enhancedMessage },
+        details: { model, eventCount: events.length },
+        error,
+        durationMs: Date.now() - startedAt,
+        traceId,
+      });
       
       // 使用错误处理器处理 LLM 错误
       try {
@@ -1804,8 +2128,24 @@ ${conversationText}
           try {
             await session.prompt(enhancedMessage);
             console.log(`[Butler] LLM 错误后纯文本降级成功: ${member.id}`);
+            this.systemLogger.logRuntime({
+              source: "Butler.handleMessage",
+              message: "Text fallback prompt succeeded",
+              input: { memberId: member.id, enhancedMessage },
+              details: { model },
+              traceId,
+            });
           } catch (fallbackErr) {
             // 纯文本降级也失败，发送友好错误消息
+            this.systemLogger.logError({
+              source: "Butler.handleMessage",
+              message: "Text fallback prompt failed",
+              input: { memberId: member.id, enhancedMessage },
+              details: { model },
+              error: fallbackErr,
+              durationMs: Date.now() - startedAt,
+              traceId,
+            });
             await this.sendErrorMessage(member, fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr)));
             return;
           }
@@ -1851,6 +2191,19 @@ ${conversationText}
     // Stop typing before sending reply
     await this.stopTyping(member.id);
     await this.gateway.sendToMember(member.id, reply);
+    this.systemLogger.logRuntime({
+      source: "Butler.handleMessage",
+      message: "Inbound member message completed",
+      input: {
+        memberId: member.id,
+        text: msg.text,
+        mediaCount: mediaContent.length,
+      },
+      output: { reply },
+      details: { model, eventCount: events.length, processedMediaCount: processedMedia.length },
+      durationMs: Date.now() - startedAt,
+      traceId,
+    });
   }
 
   /**
@@ -3983,6 +4336,7 @@ ${conversationText}
     this.stopMemoryManagement();
     
     await this.gateway.stopAll();
+    this.systemLogger.restoreConsole();
     this.db.close();
   }
 }

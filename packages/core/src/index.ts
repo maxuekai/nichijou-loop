@@ -9,6 +9,7 @@ export { SkillLoader, type LoadedSkill } from "./skill/skill-loader.js";
 export { PluginHost, type PluginManifest } from "./plugin-host/plugin-host.js";
 export { DownloadTaskManager, type DownloadTask, type DownloadProgress } from "./services/download-task-manager.js";
 export { ErrorHandler } from "./services/error-handler.js";
+export { SystemLogger, type StructuredLogPayload } from "./services/system-logger.js";
 export { ThreadContextBuilder } from "./services/thread-context-builder.js";
 export { NichijouServer } from "./server.js";
 export { ButlerService } from "./butler.js";

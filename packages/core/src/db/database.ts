@@ -5,6 +5,9 @@ import type {
   ConversationLogWithMedia,
   MediaContent,
   ProcessedMediaInfo,
+  SystemLogEntry,
+  SystemLogKind,
+  SystemLogLevel,
 } from "@nichijou/shared";
 
 export interface ChatRecord {
@@ -101,6 +104,28 @@ export class Database {
 
       CREATE INDEX IF NOT EXISTS idx_conv_log_member
         ON conversation_logs(member_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS system_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        level TEXT NOT NULL,
+        source TEXT NOT NULL,
+        message TEXT NOT NULL,
+        input_json TEXT,
+        output_json TEXT,
+        details_json TEXT,
+        error_json TEXT,
+        duration_ms INTEGER,
+        trace_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_system_logs_kind_created
+        ON system_logs(kind, created_at);
+      CREATE INDEX IF NOT EXISTS idx_system_logs_level_created
+        ON system_logs(level, created_at);
+      CREATE INDEX IF NOT EXISTS idx_system_logs_trace
+        ON system_logs(trace_id);
 
       CREATE TABLE IF NOT EXISTS reminders (
         id TEXT PRIMARY KEY,
@@ -436,6 +461,127 @@ export class Database {
       mediaContent: this.parseJsonColumn<MediaContent[]>(row.mediaContentJson, "media_content"),
       processedMedia: this.parseJsonColumn<ProcessedMediaInfo[]>(row.processedMediaJson, "processed_media"),
     }));
+  }
+
+  // --- System logs ---
+
+  saveSystemLog(log: {
+    kind: SystemLogKind;
+    level: SystemLogLevel;
+    source: string;
+    message: string;
+    inputJson?: string | null;
+    outputJson?: string | null;
+    detailsJson?: string | null;
+    errorJson?: string | null;
+    durationMs?: number | null;
+    traceId?: string | null;
+    createdAt?: string;
+  }): number {
+    const result = this.db.prepare(`
+      INSERT INTO system_logs (
+        kind, level, source, message, input_json, output_json, details_json,
+        error_json, duration_ms, trace_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      log.kind,
+      log.level,
+      log.source,
+      log.message,
+      log.inputJson ?? null,
+      log.outputJson ?? null,
+      log.detailsJson ?? null,
+      log.errorJson ?? null,
+      log.durationMs ?? null,
+      log.traceId ?? null,
+      log.createdAt ?? new Date().toISOString(),
+    );
+
+    return Number(result.lastInsertRowid);
+  }
+
+  getSystemLogs(kind: SystemLogKind, limit = 200): SystemLogEntry[] {
+    const rows = this.db.prepare(`
+      SELECT
+        id, kind, level, source, message,
+        input_json as inputJson,
+        output_json as outputJson,
+        details_json as detailsJson,
+        error_json as errorJson,
+        duration_ms as durationMs,
+        trace_id as traceId,
+        created_at as createdAt
+      FROM system_logs
+      WHERE kind = ?
+      ORDER BY datetime(created_at) DESC, id DESC
+      LIMIT ?
+    `).all(kind, limit) as SystemLogEntry[];
+
+    return rows;
+  }
+
+  cleanOldSystemLogs(kind: SystemLogKind | "all" = "all", daysToKeep: number = 90): number {
+    const modifier = `-${daysToKeep} days`;
+    const result = kind === "all"
+      ? this.db.prepare(`
+          DELETE FROM system_logs
+          WHERE datetime(created_at) < datetime('now', ?)
+        `).run(modifier)
+      : this.db.prepare(`
+          DELETE FROM system_logs
+          WHERE kind = ? AND datetime(created_at) < datetime('now', ?)
+        `).run(kind, modifier);
+
+    if (result.changes > 0) {
+      const label = kind === "all" ? "系统日志" : `${kind} 系统日志`;
+      console.log(`[Database] 清理了 ${result.changes} 条过期${label}`);
+    }
+
+    return result.changes;
+  }
+
+  getSystemLogsToDeleteCount(kind: SystemLogKind | "all", daysToKeep: number): number {
+    const modifier = `-${daysToKeep} days`;
+    const result = kind === "all"
+      ? this.db.prepare(`
+          SELECT COUNT(*) as count
+          FROM system_logs
+          WHERE datetime(created_at) < datetime('now', ?)
+        `).get(modifier) as { count: number }
+      : this.db.prepare(`
+          SELECT COUNT(*) as count
+          FROM system_logs
+          WHERE kind = ? AND datetime(created_at) < datetime('now', ?)
+        `).get(kind, modifier) as { count: number };
+
+    return result.count;
+  }
+
+  cleanExcessSystemLogs(kind: SystemLogKind, maxCount: number = 10000): number {
+    const countResult = this.db.prepare(`
+      SELECT COUNT(*) as count FROM system_logs WHERE kind = ?
+    `).get(kind) as { count: number };
+
+    if (countResult.count <= maxCount) {
+      return 0;
+    }
+
+    const result = this.db.prepare(`
+      DELETE FROM system_logs
+      WHERE kind = ?
+        AND id NOT IN (
+          SELECT id FROM system_logs
+          WHERE kind = ?
+          ORDER BY datetime(created_at) DESC, id DESC
+          LIMIT ?
+        )
+    `).run(kind, kind, maxCount);
+
+    if (result.changes > 0) {
+      console.log(`[Database] 清理了 ${result.changes} 条超量 ${kind} 系统日志（保留最新 ${maxCount} 条）`);
+    }
+
+    return result.changes;
   }
 
   // --- Reminders ---

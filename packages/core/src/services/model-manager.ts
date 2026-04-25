@@ -1,10 +1,14 @@
 import { ConfigManager } from "../storage/config.js";
 import type { LLMModelConfig, ModelsConfig } from "../storage/config.js";
 import { createProvider } from "@nichijou/ai";
+import type { LLMProvider } from "@nichijou/ai";
 import type { AgentContext } from "../types/agent.js";
 
 export class ModelManager {
-  constructor(private config: ConfigManager) {}
+  constructor(
+    private config: ConfigManager,
+    private decorateProvider: (provider: LLMProvider) => LLMProvider = (provider) => provider,
+  ) {}
 
   /**
    * 获取所有模型配置
@@ -172,7 +176,7 @@ export class ModelManager {
    */
   async testModel(modelConfig: LLMModelConfig): Promise<{success: boolean, error?: string}> {
     try {
-      const provider = createProvider({
+      const provider = this.decorateProvider(createProvider({
         provider: modelConfig.provider,
         baseUrl: modelConfig.baseUrl,
         apiKey: modelConfig.apiKey,
@@ -180,7 +184,7 @@ export class ModelManager {
         timeout: modelConfig.timeout,
         thinkingMode: modelConfig.thinkingMode,
         timeZone: this.config.get().timezone,
-      });
+      }));
 
       // 发送一个简单的测试消息
       const response = await provider.chat({

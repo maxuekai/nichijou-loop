@@ -295,3 +295,23 @@ export interface ConversationLogWithMedia extends ConversationLog {
   mediaContent?: MediaContent[];
   processedMedia?: ProcessedMediaInfo[];
 }
+
+/** Structured system runtime/error log row (admin dashboard / HTTP API shape) */
+export type SystemLogKind = "runtime" | "error";
+
+export type SystemLogLevel = "info" | "warn" | "error";
+
+export interface SystemLogEntry {
+  id: number;
+  kind: SystemLogKind;
+  level: SystemLogLevel;
+  source: string;
+  message: string;
+  inputJson?: string;
+  outputJson?: string;
+  detailsJson?: string;
+  errorJson?: string;
+  durationMs?: number;
+  traceId?: string;
+  createdAt: string;
+}

@@ -1,4 +1,4 @@
-import type { ConversationLogWithMedia, MediaContent, ProcessedMediaInfo } from "@nichijou/shared";
+import type { ConversationLogWithMedia, MediaContent, ProcessedMediaInfo, SystemLogEntry } from "@nichijou/shared";
 
 const BASE = "/api";
 
@@ -156,6 +156,11 @@ export const api = {
 
   getLogs: async (): Promise<ConversationLogWithMedia[]> => {
     const response = await request<{ logs: ConversationLogWithMedia[] }>("/logs");
+    return response.logs;
+  },
+
+  getSystemLogs: async (kind: "runtime" | "error", limit = 200): Promise<SystemLogEntry[]> => {
+    const response = await request<{ logs: SystemLogEntry[] }>(`/logs/system?kind=${kind}&limit=${limit}`);
     return response.logs;
   },
 

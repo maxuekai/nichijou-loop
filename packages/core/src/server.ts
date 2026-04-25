@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { fileURLToPath } from "node:url";
 import { hostname, platform, release, arch, cpus, totalmem, freemem, uptime as osUptime, loadavg } from "node:os";
 import { getZonedDateTimeParts } from "@nichijou/shared";
+import type { SystemLogKind } from "@nichijou/shared";
 import type { ButlerService } from "./butler.js";
 
 const PROCESS_START_TIME = Date.now();
@@ -71,6 +72,12 @@ export class NichijouServer {
     const server = createServer((req, res) => {
       this.handleRequest(req, res).catch((err) => {
         console.error("[Server] Error:", err);
+        this.butler.systemLogger.logError({
+          source: "Server",
+          message: "Unhandled request error",
+          input: { method: req.method, url: req.url },
+          error: err,
+        });
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Internal server error" }));
       });
@@ -312,9 +319,37 @@ export class NichijouServer {
       }
 
       if (path === "/api/chat" && method === "POST") {
+        const startedAt = Date.now();
+        const traceId = this.butler.systemLogger.createTraceId("api_chat");
         const body = await this.readBody(req) as { memberId: string; message: string };
-        const response = await this.butler.chat(body.memberId, body.message);
-        this.json(res, { response });
+        this.butler.systemLogger.logRuntime({
+          source: "Server.api.chat",
+          message: "Dashboard chat API started",
+          input: body,
+          traceId,
+        });
+        try {
+          const response = await this.butler.chat(body.memberId, body.message, undefined, traceId);
+          this.butler.systemLogger.logRuntime({
+            source: "Server.api.chat",
+            message: "Dashboard chat API completed",
+            input: body,
+            output: { response },
+            durationMs: Date.now() - startedAt,
+            traceId,
+          });
+          this.json(res, { response });
+        } catch (error) {
+          this.butler.systemLogger.logError({
+            source: "Server.api.chat",
+            message: "Dashboard chat API failed",
+            input: body,
+            error,
+            durationMs: Date.now() - startedAt,
+            traceId,
+          });
+          throw error;
+        }
         return;
       }
 
@@ -428,31 +463,102 @@ export class NichijouServer {
         return;
       }
 
+      if (path === "/api/logs/system" && method === "GET") {
+        const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host}`);
+        const kindParam = requestUrl.searchParams.get("kind") ?? "runtime";
+        if (kindParam !== "runtime" && kindParam !== "error") {
+          this.json(res, { error: "kind 必须是 runtime 或 error" }, 400);
+          return;
+        }
+        const rawLimit = Number(requestUrl.searchParams.get("limit") ?? 200);
+        const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.floor(rawLimit), 1), 500) : 200;
+        const logs = this.butler.db.getSystemLogs(kindParam as SystemLogKind, limit);
+        this.json(res, { logs });
+        return;
+      }
+
       if (path === "/api/logs/cleanup" && method === "POST") {
         try {
-          const body = await this.readBody(req) as { daysToKeep?: number };
+          const body = await this.readBody(req) as { daysToKeep?: number; target?: "conversation" | "runtime" | "error" | "all" };
           const daysToKeep = typeof body.daysToKeep === "number" ? body.daysToKeep : 90;
+          const target = body.target ?? "conversation";
           
           // 验证参数合理性
           if (daysToKeep < 0 || daysToKeep > 365) {
             this.json(res, { error: "保留天数必须在0-365之间" }, 400);
             return;
           }
+
+          if (!["conversation", "runtime", "error", "all"].includes(target)) {
+            this.json(res, { error: "清理目标无效" }, 400);
+            return;
+          }
           
-          // 先查询要删除的数量
-          const toDeleteCount = this.butler.db.getConversationLogsToDeleteCount(daysToKeep);
-          
-          // 执行清理
-          const actualDeletedCount = this.butler.db.cleanOldConversationLogs(daysToKeep);
+          const startedAt = Date.now();
+          const traceId = this.butler.systemLogger.createTraceId("cleanup_api");
+          this.butler.systemLogger.logRuntime({
+            source: "Server.api.logs.cleanup",
+            message: "Manual log cleanup started",
+            input: { target, daysToKeep },
+            traceId,
+          });
+
+          const counts = {
+            conversation: 0,
+            runtime: 0,
+            error: 0,
+          };
+
+          const estimated = {
+            conversation: 0,
+            runtime: 0,
+            error: 0,
+          };
+
+          if (target === "conversation" || target === "all") {
+            estimated.conversation = this.butler.db.getConversationLogsToDeleteCount(daysToKeep);
+            counts.conversation = this.butler.db.cleanOldConversationLogs(daysToKeep);
+            counts.conversation += this.butler.db.cleanExcessConversationLogs(10000);
+          }
+
+          if (target === "runtime" || target === "all") {
+            estimated.runtime = this.butler.db.getSystemLogsToDeleteCount("runtime", daysToKeep);
+            counts.runtime = this.butler.db.cleanOldSystemLogs("runtime", daysToKeep);
+            counts.runtime += this.butler.db.cleanExcessSystemLogs("runtime", 10000);
+          }
+
+          if (target === "error" || target === "all") {
+            estimated.error = this.butler.db.getSystemLogsToDeleteCount("error", daysToKeep);
+            counts.error = this.butler.db.cleanOldSystemLogs("error", daysToKeep);
+            counts.error += this.butler.db.cleanExcessSystemLogs("error", 10000);
+          }
+
+          const actualDeletedCount = counts.conversation + counts.runtime + counts.error;
+          const toDeleteCount = estimated.conversation + estimated.runtime + estimated.error;
+
+          this.butler.systemLogger.logRuntime({
+            source: "Server.api.logs.cleanup",
+            message: "Manual log cleanup completed",
+            input: { target, daysToKeep },
+            output: { deletedCount: actualDeletedCount, estimatedCount: toDeleteCount, counts },
+            durationMs: Date.now() - startedAt,
+            traceId,
+          });
           
           this.json(res, { 
             success: true, 
             deletedCount: actualDeletedCount,
             estimatedCount: toDeleteCount,
+            counts,
             daysToKeep 
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          this.butler.systemLogger.logError({
+            source: "Server.api.logs.cleanup",
+            message: "Manual log cleanup failed",
+            error: err,
+          });
           this.json(res, { error: msg }, 500);
         }
         return;
@@ -675,7 +781,7 @@ export class NichijouServer {
         try {
           const body = await this.readBody(req) as { baseUrl: string; apiKey: string; model: string };
           const { createProvider } = await import("@nichijou/ai");
-          const provider = createProvider({ ...body, timeZone: this.butler.config.get().timezone });
+          const provider = this.butler.wrapProviderWithLogging(createProvider({ ...body, timeZone: this.butler.config.get().timezone }));
           const result = await provider.chat({
             messages: [{ role: "user", content: "Hi, respond with just 'OK'" }],
             maxTokens: 10,
@@ -1245,6 +1351,12 @@ export class NichijouServer {
       res.end(JSON.stringify({ error: "Not found" }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      this.butler.systemLogger.logError({
+        source: "Server.api",
+        message: "API request failed",
+        input: { method, path },
+        error: err,
+      });
       this.json(res, { error: msg }, 500);
     }
   }

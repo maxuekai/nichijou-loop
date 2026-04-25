@@ -135,8 +135,8 @@ export function AdminLayout() {
       <aside className="w-56 bg-white border-r border-stone-200 flex flex-col fixed inset-y-0 left-0 z-20">
         {/* Logo */}
         <div className="h-14 flex items-center gap-2.5 px-5 border-b border-stone-100 flex-shrink-0">
-          <div className="w-7 h-7 rounded-lg bg-amber-500 flex items-center justify-center">
-            <span className="text-white text-sm font-bold">N</span>
+          <div className="w-8 h-8 rounded-lg bg-stone-50 flex items-center justify-center overflow-hidden">
+            <img src="/logo-192.png" alt="" className="w-full h-full object-contain" />
           </div>
           <div>
             <p className="text-sm font-bold text-stone-800 leading-tight">Nichijou Loop</p>
