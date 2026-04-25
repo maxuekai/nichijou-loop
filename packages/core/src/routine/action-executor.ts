@@ -13,6 +13,7 @@ type AiTaskRunner = (memberId: string, routine: Routine, action: RoutineAction) 
 interface ActionExecutionContext {
   latestTaskResult?: string;
   hasNotifyAction: boolean;
+  latestTaskResultSent: boolean;
 }
 
 const TIMESLOT_DEFAULTS: Record<string, string> = {
@@ -103,12 +104,14 @@ export class ActionExecutor {
         const orderedActions = this.orderActionsForExecution(dueActions);
         const context: ActionExecutionContext = {
           hasNotifyAction: orderedActions.some((a) => a.type === "notify"),
+          latestTaskResultSent: false,
         };
         for (const action of orderedActions) {
           const already = this.db.wasActionExecutedAt(member.id, routine.id, action.id, now.minuteKey);
           if (already) continue;
           await this.executeAction(member.id, routine, action, now.minuteKey, context);
         }
+        await this.sendPendingTaskResultIfNeeded(member.id, routine, now.minuteKey, context);
       }
     }
   }
@@ -176,6 +179,7 @@ export class ActionExecutor {
     
     let result = "";
     let success = true;
+    let sendsLatestTaskResult = false;
 
     try {
       switch (action.type) {
@@ -183,10 +187,12 @@ export class ActionExecutor {
           const template = (action.message ?? "").trim();
           if (template.includes("{{result}}")) {
             result = template.replace(/\{\{result\}\}/g, context.latestTaskResult ?? routine.title);
+            sendsLatestTaskResult = context.latestTaskResult !== undefined;
           } else if (template) {
             result = template;
           } else {
             result = context.latestTaskResult ?? routine.title;
+            sendsLatestTaskResult = context.latestTaskResult !== undefined;
           }
           break;
         }
@@ -255,6 +261,9 @@ export class ActionExecutor {
     if (result && shouldSendWeChat && !shouldDeferToNotify && (success || action.type === "ai_task")) {
       try {
         await this.gateway.sendToMember(memberId, result);
+        if (action.type === "ai_task" || sendsLatestTaskResult) {
+          context.latestTaskResultSent = true;
+        }
       } catch (err) {
         success = false;
         const sendError = err instanceof Error ? err.message : String(err);
@@ -270,13 +279,38 @@ export class ActionExecutor {
     const actions = this.orderActionsForExecution(this.resolveActions(routine));
     const context: ActionExecutionContext = {
       hasNotifyAction: actions.some((a) => a.type === "notify"),
+      latestTaskResultSent: false,
     };
     for (let i = 0; i < actions.length; i += 1) {
       const action = actions[i]!;
       const executedAt = new Date(Date.now() + i).toISOString();
       await this.executeAction(memberId, routine, action, executedAt, context);
     }
+    await this.sendPendingTaskResultIfNeeded(memberId, routine, new Date().toISOString(), context);
     return actions.length;
+  }
+
+  private async sendPendingTaskResultIfNeeded(
+    memberId: string,
+    routine: Routine,
+    executedAt: string,
+    context: ActionExecutionContext,
+  ): Promise<void> {
+    if (!context.hasNotifyAction || !context.latestTaskResult || context.latestTaskResultSent) return;
+
+    let result = context.latestTaskResult;
+    let success = true;
+    try {
+      await this.gateway.sendToMember(memberId, result);
+      context.latestTaskResultSent = true;
+      console.warn(`[ActionExecutor] notify 未发送 ai_task 结果，已兜底发送 routine="${routine.title}" member=${memberId}`);
+    } catch (err) {
+      success = false;
+      const sendError = err instanceof Error ? err.message : String(err);
+      result = `${result}\n[send_error] ${sendError}`;
+      console.error(`[ActionExecutor] fallback sendToMember failed:`, err);
+    }
+    this.db.logActionExecution(memberId, routine.id, `fallback_notify_${routine.id}`, result, success, executedAt);
   }
 
   private orderActionsForExecution(actions: RoutineAction[]): RoutineAction[] {
@@ -382,7 +416,8 @@ export class ActionExecutor {
       // 创建测试上下文
       const testContext: ActionExecutionContext = {
         latestTaskResult: "测试结果",
-        hasNotifyAction: routine.actions?.some(a => a.type === 'notify') ?? false
+        hasNotifyAction: routine.actions?.some(a => a.type === 'notify') ?? false,
+        latestTaskResultSent: false,
       };
 
       console.log(`[ActionExecutor] 测试执行 action: ${action.id}`);

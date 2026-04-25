@@ -153,6 +153,12 @@ async function toOpenAIMessages(messages: (Message | MultimodalMessage)[], inclu
   return result;
 }
 
+function isDeepSeekProvider(config: ProviderConfig): boolean {
+  const provider = config.provider?.toLowerCase() ?? "";
+  const baseUrl = config.baseUrl.toLowerCase();
+  return provider === "deepseek" || baseUrl.includes("deepseek.com");
+}
+
 function toOpenAITools(tools: ToolDefinition[]): OpenAITool[] {
   return tools.map((t) => ({
     type: "function" as const,
@@ -330,11 +336,16 @@ export class OpenAICompatibleProvider implements LLMProvider {
     request: ChatRequest,
     stream: boolean,
   ): Promise<Record<string, unknown>> {
+    const deepSeek = isDeepSeekProvider(this.config);
+    const thinkingEnabled = this.config.thinkingMode === true;
     const body: Record<string, unknown> = {
       model: request.model ?? this.config.model,
-      messages: await toOpenAIMessages(request.messages, this.config.thinkingMode === true),
+      messages: await toOpenAIMessages(request.messages, thinkingEnabled),
       stream,
     };
+    if (deepSeek) {
+      body.thinking = { type: thinkingEnabled ? "enabled" : "disabled" };
+    }
     if (request.temperature !== undefined) body.temperature = request.temperature;
     if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens;
     if (request.tools && request.tools.length > 0) {

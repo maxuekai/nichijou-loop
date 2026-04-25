@@ -173,6 +173,7 @@ export class ModelManager {
   async testModel(modelConfig: LLMModelConfig): Promise<{success: boolean, error?: string}> {
     try {
       const provider = createProvider({
+        provider: modelConfig.provider,
         baseUrl: modelConfig.baseUrl,
         apiKey: modelConfig.apiKey,
         model: modelConfig.model,

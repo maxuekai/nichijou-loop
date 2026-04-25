@@ -191,6 +191,7 @@ export class ButlerService {
       const model = this.modelManager.getModelById(context.preferredModelId);
       if (model && model.enabled) {
         return createProvider({
+          provider: model.provider,
           baseUrl: model.baseUrl,
           apiKey: model.apiKey,
           model: model.model,
@@ -205,6 +206,7 @@ export class ButlerService {
       const agentModel = this.modelManager.getModelForAgent(context.agentId);
       if (agentModel && agentModel.enabled) {
         return createProvider({
+          provider: agentModel.provider,
           baseUrl: agentModel.baseUrl,
           apiKey: agentModel.apiKey,
           model: agentModel.model,
@@ -219,6 +221,7 @@ export class ButlerService {
     if (activeModel && activeModel.enabled) {
       if (!this.provider) {
         this.provider = createProvider({
+          provider: activeModel.provider,
           baseUrl: activeModel.baseUrl,
           apiKey: activeModel.apiKey,
           model: activeModel.model,

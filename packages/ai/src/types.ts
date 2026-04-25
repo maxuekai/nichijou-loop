@@ -1,6 +1,7 @@
 import type { Message, ToolDefinition } from "@nichijou/shared";
 
 export interface ProviderConfig {
+  provider?: string;
   baseUrl: string;
   apiKey: string;
   model: string;
