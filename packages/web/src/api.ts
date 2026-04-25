@@ -106,27 +106,15 @@ export const api = {
     request<{ response: string }>("/chat", { method: "POST", body: JSON.stringify({ memberId, message }) }),
 
   getRoutines: (memberId: string) =>
-    request<{ routines: unknown[]; plans: unknown[]; overrides?: unknown[] }>(`/routines/${memberId}`),
-  getFamilyPlans: () =>
-    request<{ routines: unknown[]; plans: unknown[]; overrides?: unknown[] }>("/family/plans"),
+    request<{ routines: unknown[] }>(`/routines/${memberId}`),
+  getFamilyRoutines: () =>
+    request<{ routines: unknown[] }>("/family/routines"),
   upsertFamilyRoutine: (routineId: string, data: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/family/routines/${routineId}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteFamilyRoutine: (routineId: string) =>
     request<{ ok: boolean }>(`/family/routines/${routineId}`, { method: "DELETE" }),
-  upsertFamilyOverride: (overrideId: string, data: Record<string, unknown>) =>
-    request<{ ok: boolean }>(`/family/overrides/${overrideId}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteFamilyOverride: (overrideId: string) =>
-    request<{ ok: boolean }>(`/family/overrides/${overrideId}`, { method: "DELETE" }),
-  upsertPlan: (memberId: string, planId: string, data: Record<string, unknown>) =>
-    request<{ ok: boolean }>(`/plans/${memberId}/${planId}`, { method: "PUT", body: JSON.stringify(data) }),
-  deletePlan: (memberId: string, planId: string) =>
-    request<{ ok: boolean }>(`/plans/${memberId}/${planId}`, { method: "DELETE" }),
-  upsertFamilyPlan: (planId: string, data: Record<string, unknown>) =>
-    request<{ ok: boolean }>(`/family/plans/${planId}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteFamilyPlan: (planId: string) =>
-    request<{ ok: boolean }>(`/family/plans/${planId}`, { method: "DELETE" }),
-  getDayPlan: (memberId: string) =>
-    request<{ date: string; memberId: string; items: Array<{ title: string; timeSlot?: string }> }>(`/day-plan/${memberId}`),
+  getDaySchedule: (memberId: string) =>
+    request<{ date: string; memberId: string; items: Array<{ title: string; timeSlot?: string }> }>(`/day-schedule/${memberId}`),
 
   testLLM: (config: { baseUrl: string; apiKey: string; model: string }) =>
     request<{ ok: boolean; error?: string }>("/setup/test-llm", { method: "POST", body: JSON.stringify(config) }),
@@ -197,7 +185,7 @@ export const api = {
       members: Array<{
         id: string; name: string; role: string;
         profile: string | null;
-        dayPlan: { date: string; memberId: string; items: Array<{ id: string; title: string; timeSlot?: string; time?: string; source: string; reminders: Array<{ offsetMinutes: number; message: string; channel: string }> }> };
+        daySchedule: { date: string; memberId: string; items: Array<{ id: string; title: string; timeSlot?: string; time?: string; source: string; reminders: Array<{ offsetMinutes: number; message: string; channel: string }> }> };
       }>;
       soul: string;
       notifications: Array<{
@@ -228,14 +216,6 @@ export const api = {
 
   deleteReminder: (id: string) =>
     request<{ ok: boolean }>(`/reminders/${id}`, { method: "DELETE" }),
-
-  // --- AI Plan Parsing ---
-
-  parsePlan: (memberId: string, description: string) =>
-    request<{ ok: boolean; plan?: Record<string, unknown>; warnings?: string[]; error?: string }>(
-      "/plans/parse",
-      { method: "POST", body: JSON.stringify({ memberId, description }) },
-    ),
 
   getActionLogs: (memberId: string, limit = 20) =>
     request<Array<{ id: number; memberId: string; routineId: string; actionId: string; result: string; success: boolean; executedAt: string }>>(

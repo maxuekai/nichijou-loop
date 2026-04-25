@@ -1,4 +1,4 @@
-import type { ToolDefinition, Routine, Override } from "@nichijou/shared";
+import type { ToolDefinition, Routine } from "@nichijou/shared";
 import { formatDate } from "@nichijou/shared";
 import type { RoutineEngine } from "../routine/routine-engine.js";
 import type { FamilyManager } from "../family/family-manager.js";
@@ -10,7 +10,7 @@ export function createRoutineTools(
   return [
     {
       name: "set_routine",
-      description: "设置或修改成员的长期周计划习惯。weekdays 为 0-6（0=周日）",
+      description: "设置或修改成员的长期习惯。weekdays 为 0-6（0=周日）",
       parameters: {
         type: "object",
         properties: {
@@ -68,7 +68,7 @@ export function createRoutineTools(
         const memberId = params.memberId as string;
         const routine = params.routine as Routine;
         routineEngine.setRoutine(memberId, routine);
-        return { content: `已设置周计划：${routine.title}` };
+        return { content: `已设置长期习惯：${routine.title}` };
       },
     },
     {
@@ -88,45 +88,8 @@ export function createRoutineTools(
       },
     },
     {
-      name: "add_override",
-      description: "为成员添加临时计划变动（跳过/新增/修改某天的安排）",
-      parameters: {
-        type: "object",
-        properties: {
-          memberId: { type: "string" },
-          override: {
-            type: "object",
-            properties: {
-              date: { type: "string", description: "具体日期 YYYY-MM-DD" },
-              dateRange: {
-                type: "object",
-                properties: {
-                  start: { type: "string" },
-                  end: { type: "string" },
-                },
-              },
-              action: { type: "string", enum: ["skip", "add", "modify"] },
-              routineId: { type: "string" },
-              title: { type: "string" },
-              reason: { type: "string" },
-              timeSlot: { type: "string" },
-              reminders: { type: "array" },
-            },
-            required: ["action"],
-          },
-        },
-        required: ["memberId", "override"],
-      },
-      execute: async (params) => {
-        const memberId = params.memberId as string;
-        const override = params.override as Override;
-        routineEngine.addOverride(memberId, override);
-        return { content: `已添加临时变动：${override.reason ?? override.action}` };
-      },
-    },
-    {
-      name: "get_day_plan",
-      description: "查看某个成员某天的实际计划（基础规则 + 覆盖合并后）",
+      name: "get_day_schedule",
+      description: "查看某个成员某天由长期习惯生成的实际安排",
       parameters: {
         type: "object",
         properties: {
@@ -139,8 +102,8 @@ export function createRoutineTools(
         const memberId = params.memberId as string;
         const dateStr = params.date as string | undefined;
         const date = dateStr ? new Date(dateStr) : new Date();
-        const plan = routineEngine.resolveDayPlan(memberId, date);
-        return { content: JSON.stringify(plan, null, 2) };
+        const schedule = routineEngine.resolveDaySchedule(memberId, date);
+        return { content: JSON.stringify(schedule, null, 2) };
       },
     },
     {
@@ -159,9 +122,9 @@ export function createRoutineTools(
           for (let i = 0; i < 7; i++) {
             const d = new Date(weekStart);
             d.setDate(weekStart.getDate() + i);
-            const plan = routineEngine.resolveDayPlan(member.id, d);
-            if (plan.items.length > 0) {
-              days[formatDate(d)] = plan.items.map((it) => it.title);
+            const daySchedule = routineEngine.resolveDaySchedule(member.id, d);
+            if (daySchedule.items.length > 0) {
+              days[formatDate(d)] = daySchedule.items.map((it) => it.title);
             }
           }
           schedule[member.name] = days;
@@ -233,22 +196,6 @@ export function createRoutineTools(
         const routine = params.routine as Routine;
         routineEngine.setSharedRoutine(routine);
         return { content: `已设置家庭习惯：${routine.title}` };
-      },
-    },
-    {
-      name: "add_family_override",
-      description: "为家庭共享计划添加临时变动，可通过 assigneeMemberIds 定向到成员",
-      parameters: {
-        type: "object",
-        properties: {
-          override: { type: "object" },
-        },
-        required: ["override"],
-      },
-      execute: async (params) => {
-        const override = params.override as Override;
-        routineEngine.addSharedOverride(override);
-        return { content: `已添加家庭临时变动：${override.title ?? override.action}` };
       },
     },
   ];

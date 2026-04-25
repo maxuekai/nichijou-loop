@@ -10,7 +10,6 @@ import {
   ExclamationTriangleIcon,
 } from "@heroicons/react/24/outline";
 import { createIconWrapper } from "../../components/ui/Icon";
-import { Select } from "../../components/ui/Select";
 import {
   RoutineEditorDialog,
   defaultTimeForSlot,
@@ -29,24 +28,7 @@ const WarningIcon = createIconWrapper(ExclamationTriangleIcon);
 
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
 
-interface Override {
-  id: string;
-  date?: string;
-  dateRange?: { start: string; end: string };
-  action: string;
-  assigneeMemberIds?: string[];
-  routineId?: string;
-  title?: string;
-  reason?: string;
-  startTime?: string;
-  endTime?: string;
-  time?: string;
-  timeSlot?: string;
-  actions?: RoutineAction[];
-  reminders?: Array<{ offsetMinutes: number; message: string; channel: string }>;
-}
-
-interface DayPlanItem {
+interface DayScheduleItem {
   id: string;
   title: string;
   timeSlot?: string;
@@ -58,9 +40,7 @@ interface MemberDetail {
   member: { id: string; name: string; role: string; avatar?: string; channelBindings: Record<string, string>; wechatNotifyEnabled?: boolean };
   profile: string;
   routines: Routine[];
-  plans?: Override[];
-  overrides: Override[];
-  dayPlan: { date: string; items: DayPlanItem[] };
+  daySchedule: { date: string; items: DayScheduleItem[] };
 }
 
 function asText(value: unknown): string {
@@ -88,7 +68,7 @@ export function MembersPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MemberDetail | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [tab, setTab] = useState<"plan" | "routines" | "overrides" | "profile">("plan");
+  const [tab, setTab] = useState<"schedule" | "routines" | "profile">("schedule");
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
@@ -103,10 +83,6 @@ export function MembersPage() {
   const [memberNameDraft, setMemberNameDraft] = useState("");
   const [memberAvatarFile, setMemberAvatarFile] = useState<File | null>(null);
   const [memberAvatarPreview, setMemberAvatarPreview] = useState<string | null>(null);
-
-  // Override editing
-  const [editingOverride, setEditingOverride] = useState<Override | null>(null);
-  const [deletingOverride, setDeletingOverride] = useState<string | null>(null);
 
   // Action execution logs
   const [actionLogs, setActionLogs] = useState<Array<{ id: number; routineId: string; actionId: string; result: string; success: boolean; executedAt: string }>>([]);
@@ -152,7 +128,7 @@ export function MembersPage() {
 
   async function selectMember(id: string) {
     setSelectedId(id);
-    setTab("plan");
+    setTab("schedule");
     setLogsExpanded(false);
     setActionLogs([]);
     await refreshMemberDetail(id);
@@ -269,30 +245,6 @@ export function MembersPage() {
     }
   }
 
-  async function saveOverride(ovr: Override) {
-    if (!selectedId) return;
-    try {
-      setPageError(null);
-      await api.upsertPlan(selectedId, ovr.id, ovr as unknown as Record<string, unknown>);
-      setEditingOverride(null);
-      await refreshMemberDetail(selectedId);
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : "保存计划失败");
-    }
-  }
-
-  async function deleteOverride(ovrId: string) {
-    if (!selectedId) return;
-    try {
-      setPageError(null);
-      await api.deletePlan(selectedId, ovrId);
-      setDeletingOverride(null);
-      await refreshMemberDetail(selectedId);
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : "删除计划失败");
-    }
-  }
-
   async function loadActionLogs() {
     if (!selectedId) return;
     try {
@@ -310,10 +262,6 @@ export function MembersPage() {
       void loadActionLogs();
     }
   }, [selectedId]);
-
-  function formatWeekdays(weekdays: number[]): string {
-    return weekdays.map((d) => `周${WEEKDAY_NAMES[d]}`).join("、");
-  }
 
   function formatTimeSlot(slot?: string): string {
     if (!slot) return "";
@@ -430,9 +378,8 @@ export function MembersPage() {
             {/* Tabs */}
             <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
               {([
-                ["plan", "今日计划"],
+                ["schedule", "今日安排"],
                 ["routines", "7 days"],
-                ["overrides", "计划"],
                 ["profile", "成员档案"],
               ] as const).map(([key, label]) => (
                 <button
@@ -447,24 +394,24 @@ export function MembersPage() {
               ))}
             </div>
 
-            {/* Today's plan */}
-            {tab === "plan" && (
+            {/* Today's schedule */}
+            {tab === "schedule" && (
               <div className="bg-white rounded-xl border border-stone-200 p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-medium text-stone-500">
-                    今日计划 · {detail.dayPlan.date}
+                    今日安排 · {detail.daySchedule.date}
                   </h3>
-                  <span className="text-xs text-stone-400">{detail.dayPlan.items.length} 项</span>
+                  <span className="text-xs text-stone-400">{detail.daySchedule.items.length} 项</span>
                 </div>
 
-                {detail.dayPlan.items.length === 0 ? (
+                {detail.daySchedule.items.length === 0 ? (
                   <p className="text-sm text-stone-400 py-6 text-center">今日无安排</p>
                 ) : (
                   <div className="space-y-3">
-                    {detail.dayPlan.items.map((item) => (
+                    {detail.daySchedule.items.map((item) => (
                       <div key={item.id} className="flex items-start gap-3 p-3 rounded-lg bg-stone-50">
                         <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
-                          item.source === "routine" ? "bg-amber-400" : "bg-blue-400"
+                          item.source === "routine" ? "bg-amber-400" : "bg-indigo-400"
                         }`} />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-stone-800">{item.title}</p>
@@ -476,9 +423,9 @@ export function MembersPage() {
                               <span className="text-xs text-stone-400">{formatTimeSlot(item.timeSlot)}</span>
                             )}
                             <span className={`text-xs px-1.5 py-0.5 rounded ${
-                              item.source === "routine" ? "bg-amber-50 text-amber-600" : "bg-blue-50 text-blue-600"
+                              item.source === "routine" ? "bg-amber-50 text-amber-600" : "bg-indigo-50 text-indigo-600"
                             }`}>
-                              {item.source === "routine" || item.source === "family_routine" ? "7days" : "计划"}
+                              {item.source === "family_routine" ? "家庭习惯" : "个人习惯"}
                             </span>
                           </div>
                         </div>
@@ -553,7 +500,7 @@ export function MembersPage() {
                                 )}
                                 {routine.assigneeMemberIds && (
                                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600">
-                                    家庭计划
+                                    家庭习惯
                                   </span>
                                 )}
                               </div>
@@ -670,105 +617,6 @@ export function MembersPage() {
                 </div>
               </div>
             )}
-
-            {/* Overrides tab */}
-            {tab === "overrides" && (
-              <div className="space-y-4">
-                <div className="bg-white rounded-xl border border-stone-200 p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-medium text-stone-500">
-                      计划 · {detail.overrides.length} 项
-                    </h3>
-                    <button
-                      onClick={() => {
-                        setEditingOverride({
-                          id: `ovr_${Date.now().toString(36)}`,
-                          action: "skip",
-                          date: new Date().toISOString().split("T")[0],
-                        });
-                      }}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
-                    >
-                      + 新增计划
-                    </button>
-                  </div>
-
-                  {detail.overrides.length === 0 ? (
-                    <div className="py-6 text-center space-y-2">
-                      <p className="text-sm text-stone-400">暂无计划</p>
-                      <p className="text-xs text-stone-400">计划用于在某个时间段内执行特定内容，或调整既有 7 days</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {detail.overrides.map((ovr) => {
-                        const actionLabels: Record<string, { text: string; color: string }> = {
-                          skip: { text: "跳过", color: "bg-red-50 text-red-600" },
-                          add: { text: "新增", color: "bg-green-50 text-green-600" },
-                          modify: { text: "修改", color: "bg-blue-50 text-blue-600" },
-                        };
-                        const a = actionLabels[ovr.action] ?? { text: ovr.action, color: "bg-stone-100 text-stone-500" };
-                        return (
-                          <div key={ovr.id} className="flex items-center gap-3 p-3 rounded-lg bg-stone-50 group">
-                            <span className={`text-xs px-2 py-0.5 rounded font-medium ${a.color}`}>{a.text}</span>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm text-stone-700">{ovr.title ?? ovr.reason ?? "计划安排"}</p>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <p className="text-xs text-stone-400">
-                                  {ovr.date
-                                    ? ovr.date
-                                    : ovr.dateRange
-                                      ? `${ovr.dateRange.start} ~ ${ovr.dateRange.end}`
-                                      : ""}
-                                </p>
-                                {ovr.timeSlot && (
-                                  <span className="text-xs text-stone-400">{formatTimeSlot(ovr.timeSlot)}</span>
-                                )}
-                                {ovr.routineId && (
-                                  <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded">
-                                    覆盖: {detail.routines.find((r) => r.id === ovr.routineId)?.title ?? ovr.routineId}
-                                  </span>
-                                )}
-                                {ovr.assigneeMemberIds && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600">
-                                    家庭计划
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                onClick={() => {
-                                  if (ovr.assigneeMemberIds) {
-                                    navigate("/admin/family");
-                                    return;
-                                  }
-                                  setEditingOverride({ ...ovr });
-                                }}
-                                className="p-1.5 rounded-md text-stone-400 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
-                                title="编辑"
-                              >
-                                <EditIcon size="md" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  if (!ovr.assigneeMemberIds) setDeletingOverride(ovr.id);
-                                }}
-                                className="p-1.5 rounded-md text-stone-400 hover:text-red-500 hover:bg-red-50 transition-colors cursor-pointer"
-                                title={ovr.assigneeMemberIds ? "请在家庭页面删除" : "删除"}
-                              >
-                                <DeleteIcon size="md" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* 家庭项编辑统一在“家庭”页面处理 */}
 
             {/* Profile */}
             {tab === "profile" && (
@@ -1094,194 +942,6 @@ export function MembersPage() {
         />
       )}
 
-      {/* 家庭项编辑统一在“家庭”页面处理 */}
-
-      {/* Delete plan confirmation dialog */}
-      {deletingOverride && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setDeletingOverride(null)}>
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-stone-800 mb-2">删除计划</h3>
-            <p className="text-sm text-stone-500 mb-6">确定要删除这条计划吗？</p>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setDeletingOverride(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors">取消</button>
-              <button onClick={() => deleteOverride(deletingOverride)} className="px-4 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-colors">删除</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit plan dialog */}
-      {editingOverride && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingOverride(null)}>
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-stone-800 mb-4">
-              {detail?.overrides.some((o) => o.id === editingOverride.id) ? "编辑计划" : "新增计划"}
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">计划类型</label>
-                <Select
-                  value={editingOverride.action}
-                  onChange={(next) => setEditingOverride({ ...editingOverride, action: next })}
-                  options={[
-                    { value: "skip", label: "暂停（跳过某段时间内的习惯）" },
-                    { value: "add", label: "新增（在时间段内执行内容）" },
-                    { value: "modify", label: "调整（替换原习惯执行内容）" },
-                  ]}
-                  className="w-full"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-2">时间范围</label>
-                <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-1.5 text-xs text-stone-600">
-                    <input
-                      type="radio"
-                      name="dateMode"
-                      checked={!editingOverride.dateRange}
-                      onChange={() => {
-                        const { dateRange: _, ...rest } = editingOverride;
-                        void _;
-                        setEditingOverride({ ...rest, date: editingOverride.date || new Date().toISOString().split("T")[0] });
-                      }}
-                      className="text-amber-500 focus:ring-amber-500/20"
-                    />
-                    单日
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-stone-600">
-                    <input
-                      type="radio"
-                      name="dateMode"
-                      checked={!!editingOverride.dateRange}
-                      onChange={() => {
-                        const today = new Date().toISOString().split("T")[0]!;
-                        const { date: _, ...rest } = editingOverride;
-                        void _;
-                        setEditingOverride({ ...rest, dateRange: { start: today, end: today } });
-                      }}
-                      className="text-amber-500 focus:ring-amber-500/20"
-                    />
-                    时间段
-                  </label>
-                </div>
-                {!editingOverride.dateRange ? (
-                  <input
-                    type="date"
-                    value={editingOverride.date ?? ""}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, date: e.target.value })}
-                    className="mt-2 w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                ) : (
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-stone-400 mb-0.5">开始日期</label>
-                      <input
-                        type="date"
-                        value={editingOverride.dateRange.start}
-                        onChange={(e) => setEditingOverride({ ...editingOverride, dateRange: { ...editingOverride.dateRange!, start: e.target.value } })}
-                        className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-stone-400 mb-0.5">结束日期</label>
-                      <input
-                        type="date"
-                        value={editingOverride.dateRange.end}
-                        onChange={(e) => setEditingOverride({ ...editingOverride, dateRange: { ...editingOverride.dateRange!, end: e.target.value } })}
-                        className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-1">开始时间</label>
-                  <input
-                    type="time"
-                    value={editingOverride.startTime ?? editingOverride.time ?? ""}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, startTime: e.target.value || undefined, time: e.target.value || undefined })}
-                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-1">结束时间</label>
-                  <input
-                    type="time"
-                    value={editingOverride.endTime ?? ""}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, endTime: e.target.value || undefined })}
-                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">时段（可选）</label>
-                <Select
-                  value={editingOverride.timeSlot ?? ""}
-                  onChange={(next) => setEditingOverride({ ...editingOverride, timeSlot: next || undefined })}
-                  options={[
-                    { value: "", label: "全天" },
-                    { value: "morning", label: "上午" },
-                    { value: "afternoon", label: "下午" },
-                    { value: "evening", label: "晚上" },
-                  ]}
-                  className="w-full"
-                />
-              </div>
-
-              {(editingOverride.action === "skip" || editingOverride.action === "modify") && detail && detail.routines.length > 0 && (
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-1">覆盖的 7 days 习惯</label>
-                  <Select
-                    value={editingOverride.routineId ?? ""}
-                    onChange={(next) => setEditingOverride({ ...editingOverride, routineId: next || undefined })}
-                    options={[
-                      { value: "", label: "所有习惯（该时段内全部覆盖）" },
-                      ...detail.routines.map((r) => ({
-                        value: r.id,
-                        label: `${r.title} (${formatWeekdays(r.weekdays)}${r.time ? ` ${r.time}` : ""})`,
-                      })),
-                    ]}
-                    className="w-full"
-                  />
-                </div>
-              )}
-
-              {editingOverride.action !== "skip" && (
-                <div>
-                  <label className="block text-xs font-medium text-stone-500 mb-1">计划内容</label>
-                  <input
-                    type="text"
-                    value={editingOverride.title ?? ""}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, title: e.target.value })}
-                    placeholder="如：出差、团建、去医院复查"
-                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">原因（可选）</label>
-                <input
-                  type="text"
-                  value={editingOverride.reason ?? ""}
-                  onChange={(e) => setEditingOverride({ ...editingOverride, reason: e.target.value })}
-                  placeholder="如：公司团建、身体不适"
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 mt-6">
-              <button onClick={() => setEditingOverride(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100 transition-colors cursor-pointer">取消</button>
-              <button onClick={() => saveOverride(editingOverride)} className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors cursor-pointer">保存</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      </div>
   );
 }

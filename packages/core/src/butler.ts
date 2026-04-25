@@ -17,7 +17,6 @@ import type {
   ToolDefinition, 
   Routine, 
   RoutineAction, 
-  Plan,
   MediaContent,
   ProcessedMediaInfo,
   ReferenceContent,
@@ -1037,9 +1036,9 @@ ${conversationText}
    - 兴趣爱好
    - 工作/学习安排
 
-2. **重要决定与计划**：
+2. **重要决定与目标**：
    - 近期的重要决定
-   - 制定的计划和目标
+   - 制定的目标和待办
    - 需要后续跟进的事项
 
 3. **情感状态与关切**：
@@ -1366,10 +1365,10 @@ ${conversationText}
 
       const today = new Date();
       const tz = this.config.get().timezone || "Asia/Shanghai";
-      const plan = this.routineEngine.resolveDayPlan(member.id, today, tz);
-      if (plan.items.length > 0) {
-        prompt += `# 今日计划\n\n`;
-        for (const item of plan.items) {
+      const schedule = this.routineEngine.resolveDaySchedule(member.id, today, tz);
+      if (schedule.items.length > 0) {
+        prompt += `# 今日安排\n\n`;
+        for (const item of schedule.items) {
           prompt += `- ${item.timeSlot ?? ""} ${item.title}\n`;
         }
         prompt += "\n---\n\n";
@@ -1501,10 +1500,10 @@ ${conversationText}
     }
 
     const tz = this.config.get().timezone || "Asia/Shanghai";
-    const plan = this.routineEngine.resolveDayPlan(member.id, new Date(), tz);
-    if (plan.items.length > 0) {
-      prompt += "\n\n# 今日计划\n";
-      for (const item of plan.items) {
+    const schedule = this.routineEngine.resolveDaySchedule(member.id, new Date(), tz);
+    if (schedule.items.length > 0) {
+      prompt += "\n\n# 今日安排\n";
+      for (const item of schedule.items) {
         const itemTime = item.time ?? item.timeSlot ?? "";
         prompt += `- ${itemTime} ${item.title}\n`;
       }
@@ -2382,7 +2381,7 @@ ${conversationText}
             summary += `  · ${r.title}（每周${days}）\n`;
           }
         }
-        summary += "\n你可以随时告诉我调整计划，或在管理页面查看和编辑。";
+        summary += "\n你可以随时告诉我调整习惯，或在管理页面查看和编辑。";
 
         // Auto-apply profile and routines
         if (result.profile) {
@@ -2505,8 +2504,8 @@ ${conversationText}
           "  /help     - 显示此帮助",
           "  /status   - 系统状态",
           "  /members  - 成员列表",
-          "  /plan     - 今日计划",
-          "  /plan @名字 - 查看指定成员的计划",
+          "  /schedule     - 今日安排",
+          "  /schedule @名字 - 查看指定成员的今日安排",
           "  /usage    - Token 用量",
           "  /wechat   - 微信连接状态",
         ].join("\n");
@@ -2561,7 +2560,7 @@ ${conversationText}
         }).join("\n");
       }
 
-      case "plan": {
+      case "schedule": {
         const targetName = args.join(" ").replace("@", "").trim();
         let targetMember = member;
         if (targetName) {
@@ -2569,9 +2568,9 @@ ${conversationText}
           if (!found) return `未找到成员「${targetName}」`;
           targetMember = found;
         }
-        const plan = this.routineEngine.resolveDayPlan(targetMember.id, new Date());
-        if (plan.items.length === 0) return `${targetMember.name} 今日无计划`;
-        return `📅 ${targetMember.name} 今日计划：\n` + plan.items.map((it) =>
+        const schedule = this.routineEngine.resolveDaySchedule(targetMember.id, new Date());
+        if (schedule.items.length === 0) return `${targetMember.name} 今日无安排`;
+        return `📅 ${targetMember.name} 今日安排：\n` + schedule.items.map((it) =>
           `  ${it.timeSlot ?? ""} ${it.title}`,
         ).join("\n");
       }
@@ -2782,85 +2781,6 @@ ${conversationText}
 
   hasActiveInterview(memberId: string): boolean {
     return this.interviewSessions.has(memberId);
-  }
-
-  async parsePlanDescription(memberId: string, description: string): Promise<{ plan: Plan; warnings: string[] }> {
-    const member = this.familyManager.getMember(memberId);
-    const { display, iso } = this.formatNow();
-
-    const systemPrompt = [
-      "你是家庭管家的计划解析器。把自然语言描述解析为单个计划 JSON。",
-      `当前时间: ${display} (${iso})`,
-      member ? `当前成员: ${member.name}` : "",
-      "",
-      "# 输出格式",
-      JSON.stringify({
-        title: "计划标题",
-        action: "add",
-        date: "YYYY-MM-DD",
-        dateRange: { start: "YYYY-MM-DD", end: "YYYY-MM-DD" },
-        startTime: "HH:MM",
-        endTime: "HH:MM",
-        timeSlot: "morning",
-        reason: "简短备注",
-        warnings: ["无法确定时间时给出说明"],
-      }, null, 2),
-      "",
-      "# 规则",
-      "1. action 仅能是 skip/add/modify 之一，默认 add",
-      "2. date 与 dateRange 二选一；无法确定时优先给 date=今天",
-      "3. startTime/endTime 使用 24 小时 HH:MM；无法确定可省略",
-      "4. timeSlot 仅 morning/afternoon/evening，可省略",
-      "5. title 必填，简洁准确",
-      "6. 只返回 JSON，不要有其他文本",
-    ].filter(Boolean).join("\n");
-
-    const provider = this.getProvider();
-    const result = await provider.chat({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: description },
-      ],
-      maxTokens: 1200,
-    });
-    this.logProviderUsage(memberId, result.usage);
-
-    const text = result.message.content.trim();
-    const parsed = this.extractJsonObject<Plan & { warnings?: string[] }>(text);
-    const action = parsed.action === "skip" || parsed.action === "add" || parsed.action === "modify"
-      ? parsed.action
-      : "add";
-    const today = getZonedDateTimeParts(new Date(), this.config.get().timezone || "Asia/Shanghai").date;
-    const plan: Plan = {
-      id: `pln_${Date.now().toString(36)}`,
-      action,
-      title: parsed.title || description.slice(0, 20),
-      reason: parsed.reason,
-      date: parsed.date ?? (parsed.dateRange ? undefined : today),
-      dateRange: parsed.dateRange,
-      startTime: parsed.startTime,
-      endTime: parsed.endTime,
-      time: parsed.startTime ?? parsed.time,
-      timeSlot: parsed.timeSlot,
-    };
-
-    return { plan, warnings: parsed.warnings ?? [] };
-  }
-
-  private extractJsonObject<T>(text: string): T {
-    const first = text.indexOf("{");
-    if (first === -1) throw new Error("AI 未能返回有效的 JSON 格式");
-    let depth = 0;
-    for (let i = first; i < text.length; i += 1) {
-      const ch = text[i];
-      if (ch === "{") depth += 1;
-      if (ch === "}") depth -= 1;
-      if (depth === 0) {
-        const raw = text.slice(first, i + 1);
-        return JSON.parse(raw) as T;
-      }
-    }
-    throw new Error("AI 未能返回完整 JSON");
   }
 
   applyRoutines(memberId: string, routines: Routine[]): void {

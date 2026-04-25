@@ -22,7 +22,7 @@ interface ReminderRule {
   channel: string;
 }
 
-interface PlanItem {
+interface ScheduleItem {
   id: string;
   title: string;
   timeSlot?: string;
@@ -37,7 +37,7 @@ interface BoardMember {
   role: string;
   avatar?: string;
   profile: string | null;
-  dayPlan: { date: string; memberId: string; items: PlanItem[] };
+  daySchedule: { date: string; memberId: string; items: ScheduleItem[] };
 }
 
 interface BoardNotification {
@@ -254,7 +254,7 @@ export function BoardView() {
       const data = await api.getWeekSchedule();
       setWeekSchedule(data.schedule);
     } catch (err) {
-      setBoardError(err instanceof Error ? err.message : "周计划加载失败");
+      setBoardError(err instanceof Error ? err.message : "周安排加载失败");
     }
   }
 
@@ -268,14 +268,14 @@ export function BoardView() {
 
   const lunarInfo = useMemo(() => getLunarInfo(now), [now.toDateString()]);
 
-  const allItems: Array<PlanItem & { memberName: string }> = [];
+  const allItems: Array<ScheduleItem & { memberName: string }> = [];
   for (const m of members) {
-    for (const item of m.dayPlan.items) {
+    for (const item of m.daySchedule.items) {
       allItems.push({ ...item, memberName: m.name });
     }
   }
 
-  const grouped: Record<string, Array<PlanItem & { memberName: string }>> = { morning: [], afternoon: [], evening: [], other: [] };
+  const grouped: Record<string, Array<ScheduleItem & { memberName: string }>> = { morning: [], afternoon: [], evening: [], other: [] };
   for (const item of allItems) {
     const slot = item.timeSlot && SLOT_ORDER[item.timeSlot] !== undefined ? item.timeSlot : "other";
     grouped[slot]!.push(item);

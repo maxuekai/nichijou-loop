@@ -139,43 +139,24 @@ export interface Routine {
   archived?: boolean;
 }
 
-export interface Plan {
-  id: string;
-  date?: string;
-  dateRange?: { start: string; end: string };
-  action: "skip" | "add" | "modify";
-  assigneeMemberIds?: string[];
-  routineId?: string;
-  title?: string;
-  reason?: string;
-  startTime?: string;
-  time?: string;
-  endTime?: string;
-  timeSlot?: string;
-  reminders?: ReminderRule[];
-  actions?: RoutineAction[];
-}
-// Backward compatibility for existing code and payloads.
-export type Override = Plan;
-
 export interface ReminderRule {
   offsetMinutes: number;
   message: string;
   channel: "wechat" | "dashboard" | "both";
 }
 
-export interface DayPlan {
+export interface DaySchedule {
   date: string;
   memberId: string;
-  items: DayPlanItem[];
+  items: DayScheduleItem[];
 }
 
-export interface DayPlanItem {
+export interface DayScheduleItem {
   id: string;
   title: string;
   timeSlot?: string;
   time?: string;
-  source: "routine" | "plan" | "family_routine" | "family_plan" | "override" | "family_override";
+  source: "routine" | "family_routine";
   routineId?: string;
   reminders: ReminderRule[];
 }

@@ -214,10 +214,9 @@ export class NichijouServer {
         return;
       }
 
-      if (path === "/api/family/plans" && method === "GET") {
+      if (path === "/api/family/routines" && method === "GET") {
         const routines = this.butler.routineEngine.getSharedRoutines();
-        const plans = this.butler.routineEngine.getSharedPlans();
-        this.json(res, { routines, plans, overrides: plans });
+        this.json(res, { routines });
         return;
       }
 
@@ -233,10 +232,9 @@ export class NichijouServer {
         const member = this.butler.familyManager.getMember(memberId);
         const profile = this.butler.storage.readMemberProfile(memberId);
         const routines = this.butler.routineEngine.getRoutines(memberId);
-        const plans = this.butler.routineEngine.getPlans(memberId);
         const tz = this.butler.config.get().timezone || "Asia/Shanghai";
-        const dayPlan = this.butler.routineEngine.resolveDayPlan(memberId, new Date(), tz);
-        this.json(res, { member, profile, routines, plans, overrides: plans, dayPlan });
+        const daySchedule = this.butler.routineEngine.resolveDaySchedule(memberId, new Date(), tz);
+        this.json(res, { member, profile, routines, daySchedule });
         return;
       }
 
@@ -660,64 +658,18 @@ export class NichijouServer {
         return;
       }
 
-      if (path === "/api/plans/parse" && method === "POST") {
-        try {
-          const body = await this.readBody(req) as { memberId: string; description: string };
-          if (!body.memberId || !body.description) {
-            this.json(res, { ok: false, error: "memberId 和 description 为必填" });
-            return;
-          }
-          const { plan, warnings } = await this.butler.parsePlanDescription(body.memberId, body.description);
-          this.json(res, { ok: true, plan, warnings });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.json(res, { ok: false, error: msg });
-        }
-        return;
-      }
-
       if (path.startsWith("/api/routines/") && method === "GET") {
         const memberId = path.split("/")[3]!;
         const routines = this.butler.routineEngine.getRoutines(memberId);
-        const plans = this.butler.routineEngine.getPlans(memberId);
-        this.json(res, { routines, plans, overrides: plans });
+        this.json(res, { routines });
         return;
       }
 
-      if (path.startsWith("/api/plans/") && (method === "PUT" || method === "DELETE")) {
-        const parts = path.split("/");
-        const memberId = parts[3]!;
-        const planId = parts[4]!;
-        if (method === "PUT") {
-          const body = await this.readBody(req) as Record<string, unknown>;
-          this.butler.routineEngine.updatePlan(memberId, planId, body as never);
-          this.json(res, { ok: true });
-        } else {
-          const removed = this.butler.routineEngine.removePlan(memberId, planId);
-          this.json(res, { ok: removed });
-        }
-        return;
-      }
-
-      if (path.startsWith("/api/family/plans/") && (method === "PUT" || method === "DELETE")) {
-        const parts = path.split("/");
-        const planId = parts[4]!;
-        if (method === "PUT") {
-          const body = await this.readBody(req) as Record<string, unknown>;
-          this.butler.routineEngine.updateSharedPlan(planId, body as never);
-          this.json(res, { ok: true });
-        } else {
-          const removed = this.butler.routineEngine.removeSharedPlan(planId);
-          this.json(res, { ok: removed });
-        }
-        return;
-      }
-
-      if (path.startsWith("/api/day-plan/") && method === "GET") {
+      if (path.startsWith("/api/day-schedule/") && method === "GET") {
         const memberId = path.split("/")[3]!;
         const tz = this.butler.config.get().timezone || "Asia/Shanghai";
-        const plan = this.butler.routineEngine.resolveDayPlan(memberId, new Date(), tz);
-        this.json(res, plan);
+        const schedule = this.butler.routineEngine.resolveDaySchedule(memberId, new Date(), tz);
+        this.json(res, schedule);
         return;
       }
 
@@ -730,35 +682,6 @@ export class NichijouServer {
           : 20;
         const logs = this.butler.db.getActionExecutionLogs(memberId, safeLimit);
         this.json(res, logs);
-        return;
-      }
-
-      if (path.startsWith("/api/overrides/") && (method === "PUT" || method === "DELETE")) {
-        const parts = path.split("/");
-        const memberId = parts[3]!;
-        const overrideId = parts[4]!;
-        if (method === "PUT") {
-          const body = await this.readBody(req) as Record<string, unknown>;
-          this.butler.routineEngine.updateOverride(memberId, overrideId, body as never);
-          this.json(res, { ok: true });
-        } else {
-          const removed = this.butler.routineEngine.removeOverride(memberId, overrideId);
-          this.json(res, { ok: removed });
-        }
-        return;
-      }
-
-      if (path.startsWith("/api/family/overrides/") && (method === "PUT" || method === "DELETE")) {
-        const parts = path.split("/");
-        const overrideId = parts[4]!;
-        if (method === "PUT") {
-          const body = await this.readBody(req) as Record<string, unknown>;
-          this.butler.routineEngine.updateSharedOverride(overrideId, body as never);
-          this.json(res, { ok: true });
-        } else {
-          const removed = this.butler.routineEngine.removeSharedOverride(overrideId);
-          this.json(res, { ok: removed });
-        }
         return;
       }
 
@@ -1177,9 +1100,9 @@ export class NichijouServer {
           const dateStr = getZonedDateTimeParts(d, tz).date;
           schedule[dateStr] = {};
           for (const member of members) {
-            const plan = this.butler.routineEngine.resolveDayPlan(member.id, d, tz);
-            if (plan.items.length > 0) {
-              schedule[dateStr]![member.name] = plan.items.map((it) => it.title);
+            const daySchedule = this.butler.routineEngine.resolveDaySchedule(member.id, d, tz);
+            if (daySchedule.items.length > 0) {
+              schedule[dateStr]![member.name] = daySchedule.items.map((it) => it.title);
             }
           }
         }
@@ -1195,8 +1118,8 @@ export class NichijouServer {
         const memberDetails = members.map((m) => {
           const profile = this.butler.storage.readMemberProfile(m.id);
           const tz = this.butler.config.get().timezone || "Asia/Shanghai";
-          const dayPlan = this.butler.routineEngine.resolveDayPlan(m.id, new Date(), tz);
-          return { ...m, profile, dayPlan };
+          const daySchedule = this.butler.routineEngine.resolveDaySchedule(m.id, new Date(), tz);
+          return { ...m, profile, daySchedule };
         });
 
         const recentActionLogs = this.butler.db.getRecentActionExecutionLogs(120);

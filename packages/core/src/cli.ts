@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import * as readline from "node:readline";
@@ -84,6 +84,7 @@ if (command === "__serve__") {
     repl: cmdRepl,
     logs: cmdLogs,
     plugin: cmdPlugin,
+    "cleanup-plan-data": cmdCleanupPlanData,
     help: cmdHelp,
     version: cmdVersion,
   };
@@ -120,6 +121,7 @@ function cmdHelp(): void {
   plugin list            查看 config 中的 plugins 与本地解析状态
   plugin install <pkg>   安装到 ~/.nichijou/plugins 并写入 plugins
   plugin remove <pkg>    从配置移除并 npm uninstall
+  cleanup-plan-data      删除已下线 Plan/Override YAML 数据
   help                   显示此帮助
   version                显示版本号
 
@@ -132,12 +134,46 @@ function cmdHelp(): void {
   nichijou dev                          # 前台启动
   nichijou plugin list                  # 查看已安装插件
   nichijou plugin install @scope/pkg  # 或 file:/绝对路径/插件包
+  nichijou cleanup-plan-data            # 清理旧计划 YAML 文件
   nichijou status                       # 检查运行状态
 `);
 }
 
 function cmdVersion(): void {
   console.log("nichijou-loop v0.1.0");
+}
+
+function cmdCleanupPlanData(): void {
+  const removed: string[] = [];
+  const candidates = [
+    join(DATA_DIR, "family", "shared-plans.yaml"),
+    join(DATA_DIR, "family", "shared-overrides.yaml"),
+  ];
+  const membersDir = join(DATA_DIR, "family", "members");
+
+  if (existsSync(membersDir)) {
+    for (const filename of readdirSync(membersDir)) {
+      if (filename.endsWith(".plans.yaml") || filename.endsWith(".overrides.yaml")) {
+        candidates.push(join(membersDir, filename));
+      }
+    }
+  }
+
+  for (const filePath of candidates) {
+    if (!existsSync(filePath)) continue;
+    rmSync(filePath, { force: true });
+    removed.push(filePath);
+  }
+
+  if (removed.length === 0) {
+    console.log("未发现旧 Plan/Override YAML 数据。");
+    return;
+  }
+
+  console.log(`已删除 ${removed.length} 个旧 Plan/Override YAML 文件：`);
+  for (const filePath of removed) {
+    console.log(`  ${filePath}`);
+  }
 }
 
 // ─── Daemon management ──────────────────────────────

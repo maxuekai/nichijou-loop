@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../api";
 import {
   RoutineEditorDialog,
@@ -10,20 +10,6 @@ import {
 const WEEKDAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
 
 type FamilyRoutine = Routine;
-
-interface FamilyPlan {
-  id: string;
-  title?: string;
-  description?: string;
-  action: "skip" | "add" | "modify";
-  assigneeMemberIds?: string[];
-  date?: string;
-  dateRange?: { start: string; end: string };
-  startTime?: string;
-  endTime?: string;
-  time?: string;
-  reason?: string;
-}
 
 function asText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -42,18 +28,9 @@ export function FamilyPage() {
   const [familyAvatarFile, setFamilyAvatarFile] = useState<File | null>(null);
   const [familyAvatarPreview, setFamilyAvatarPreview] = useState<string | null>(null);
 
-  const [data, setData] = useState<{ routines: FamilyRoutine[]; plans: FamilyPlan[] }>({ routines: [], plans: [] });
+  const [data, setData] = useState<{ routines: FamilyRoutine[] }>({ routines: [] });
   const [editingRoutine, setEditingRoutine] = useState<FamilyRoutine | null>(null);
-  const [editingPlan, setEditingPlan] = useState<FamilyPlan | null>(null);
-
-  const [planParsing, setPlanParsing] = useState(false);
-  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
-  const [parseError, setParseError] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
-
-  const [mentionOpen, setMentionOpen] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState("");
-  const [mentionStart, setMentionStart] = useState<number | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -73,84 +50,15 @@ export function FamilyPage() {
   }
 
   async function loadData() {
-    const res = await api.getFamilyPlans();
+    const res = await api.getFamilyRoutines();
     setData({
       routines: res.routines as unknown as FamilyRoutine[],
-      plans: (res.plans ?? res.overrides ?? []) as unknown as FamilyPlan[],
     });
   }
 
   function formatAssignees(ids?: string[]): string {
     if (!ids || ids.length === 0 || ids.length === members.length) return "@all";
     return ids.map((id) => `@${members.find((m) => m.id === id)?.name ?? id}`).join(" ");
-  }
-
-  function parseAssigneesFromText(input?: string): string[] {
-    const text = asText(input).trim().replace(/，/g, ",");
-    if (!text || text.includes("@all")) return members.map((m) => m.id);
-    const names = text.match(/@([^\s,]+)/g)?.map((token) => token.slice(1)) ?? [];
-    const ids = members.filter((m) => names.includes(m.name) || names.includes(m.id)).map((m) => m.id);
-    return ids.length > 0 ? ids : members.map((m) => m.id);
-  }
-
-  const mentionCandidates = useMemo(() => {
-    const q = mentionQuery.trim().toLowerCase();
-    if (!q) return members;
-    return members.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
-  }, [members, mentionQuery]);
-
-  function updateMentionState(text: string, cursor: number) {
-    const left = text.slice(0, cursor);
-    const match = left.match(/(^|\s)@([^\s@]*)$/);
-    if (!match) {
-      setMentionOpen(false);
-      setMentionStart(null);
-      setMentionQuery("");
-      return;
-    }
-    setMentionOpen(true);
-    setMentionStart(left.lastIndexOf("@"));
-    setMentionQuery(match[2] ?? "");
-  }
-
-  function applyMention(memberName: string) {
-    if (mentionStart == null) return;
-    if (editingPlan) {
-      const source = editingPlan.description ?? "";
-      const next = `${source.slice(0, mentionStart)}@${memberName} ${source.slice((mentionStart + 1) + mentionQuery.length)}`;
-      setEditingPlan({ ...editingPlan, description: next, assigneeMemberIds: parseAssigneesFromText(next) });
-    }
-    setMentionOpen(false);
-    setMentionStart(null);
-    setMentionQuery("");
-  }
-
-  async function parsePlanWithAI() {
-    if (!editingPlan) return;
-    const description = asText(editingPlan.description);
-    if (!description.trim() || planParsing || members.length === 0) return;
-    setPlanParsing(true);
-    setAiWarnings([]);
-    setParseError(null);
-    try {
-      const res = await api.parsePlan(members[0]!.id, description.trim());
-      if (!res.ok || !res.plan) {
-        setParseError(res.error ?? "AI 解析失败");
-        return;
-      }
-      const parsed = res.plan as unknown as FamilyPlan;
-      setEditingPlan({
-        ...parsed,
-        id: editingPlan.id,
-        description,
-        assigneeMemberIds: parseAssigneesFromText(description),
-      });
-      setAiWarnings(res.warnings ?? []);
-    } catch (err) {
-      setParseError(err instanceof Error ? err.message : "AI 解析失败");
-    } finally {
-      setPlanParsing(false);
-    }
   }
 
   async function saveFamilyRoutine(routine: FamilyRoutine) {
@@ -278,40 +186,6 @@ export function FamilyPage() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-stone-200 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-medium text-stone-500">家庭计划 · {data.plans.length} 项</h3>
-          <button onClick={() => {
-            setParseError(null);
-            setAiWarnings([]);
-            setEditingPlan({ id: `pln_${Date.now().toString(36)}`, action: "add", description: "", assigneeMemberIds: members.map((m) => m.id) });
-          }} className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100">+ 新增家庭计划</button>
-        </div>
-        <div className="space-y-2">
-          {data.plans.map((p) => (
-            <div key={p.id} className="p-3 rounded-lg bg-stone-50 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-stone-800">{p.title ?? "家庭计划"}</p>
-                <p className="text-xs text-stone-500 mt-0.5">{formatAssignees(p.assigneeMemberIds)} · {p.action}{p.date ? ` · ${p.date}` : ""}{p.startTime ? ` · ${p.startTime}` : ""}{p.endTime ? `-${p.endTime}` : ""}</p>
-              </div>
-              <div className="flex gap-1">
-                <button onClick={() => { setParseError(null); setAiWarnings([]); setEditingPlan({ ...p, description: asText(p.description) || `${p.title ?? "家庭计划"} ${formatAssignees(p.assigneeMemberIds)}` }); }} className="px-2 py-1 text-xs rounded border border-stone-300 text-stone-600 hover:bg-stone-100">编辑</button>
-                <button onClick={async () => {
-                  try {
-                    setPageError(null);
-                    await api.deleteFamilyPlan(p.id);
-                    await loadData();
-                  } catch (err) {
-                    setPageError(err instanceof Error ? err.message : "删除家庭计划失败");
-                  }
-                }} className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50">删除</button>
-              </div>
-            </div>
-          ))}
-          {data.plans.length === 0 && <p className="text-sm text-stone-400 py-4 text-center">暂无家庭计划</p>}
-        </div>
-      </div>
-
       {editingRoutine && (
         <RoutineEditorDialog
           routine={editingRoutine}
@@ -322,60 +196,6 @@ export function FamilyPage() {
           onCancel={() => setEditingRoutine(null)}
           onSave={saveFamilyRoutine}
         />
-      )}
-
-      {editingPlan && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setEditingPlan(null)}>
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-xl mx-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-stone-800 mb-3">家庭计划（自然语言）</h3>
-            <div className="relative">
-              <textarea
-                value={asText(editingPlan.description)}
-                onChange={(e) => {
-                  const text = e.target.value;
-                  setEditingPlan({ ...editingPlan, description: text, assigneeMemberIds: parseAssigneesFromText(text) });
-                  updateMentionState(text, e.target.selectionStart ?? text.length);
-                }}
-                onClick={(e) => updateMentionState((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0)}
-                onKeyUp={(e) => updateMentionState((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0)}
-                rows={4}
-                className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                placeholder="例如：明天 14:00-18:00 @妈妈 复查，其他习惯暂停"
-              />
-              {mentionOpen && (
-                <div className="absolute z-20 mt-1 w-full rounded-lg border border-stone-200 bg-white shadow-lg max-h-40 overflow-auto">
-                  {mentionCandidates.map((m) => <button key={m.id} onClick={() => applyMention(m.name)} className="w-full text-left px-3 py-2 text-sm hover:bg-stone-50">@{m.name}</button>)}
-                  <button onClick={() => applyMention("all")} className="w-full text-left px-3 py-2 text-sm hover:bg-stone-50 text-amber-700">@all</button>
-                </div>
-              )}
-            </div>
-            <div className="flex items-center justify-between mt-2">
-              <p className="text-[11px] text-stone-400">仅需输入描述；AI 会生成计划类型、日期与时间段</p>
-              <button onClick={parsePlanWithAI} disabled={!asText(editingPlan.description).trim() || planParsing} className="px-3 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50">{planParsing ? "AI 解析中…" : "AI 解析"}</button>
-            </div>
-            {parseError && <p className="text-xs text-red-500 mt-1">{parseError}</p>}
-            {aiWarnings.length > 0 && <div className="mt-2 p-2 rounded bg-yellow-50 border border-yellow-200">{aiWarnings.map((w, i) => <p key={i} className="text-xs text-yellow-700">{w}</p>)}</div>}
-            {editingPlan.title && (
-              <div className="mt-3 p-3 rounded-lg bg-stone-50 border border-stone-200">
-                <p className="text-sm font-medium text-stone-800">{editingPlan.title}</p>
-                <p className="text-xs text-stone-500 mt-1">{editingPlan.action} · {formatAssignees(editingPlan.assigneeMemberIds)} · {editingPlan.date ?? (editingPlan.dateRange ? `${editingPlan.dateRange.start}~${editingPlan.dateRange.end}` : "")}{editingPlan.startTime ? ` ${editingPlan.startTime}` : ""}{editingPlan.endTime ? `-${editingPlan.endTime}` : ""}</p>
-              </div>
-            )}
-            <div className="flex justify-end gap-3 mt-5">
-              <button onClick={() => setEditingPlan(null)} className="px-4 py-2 rounded-lg text-sm text-stone-600 hover:bg-stone-100">取消</button>
-              <button onClick={async () => {
-                try {
-                  setPageError(null);
-                  await api.upsertFamilyPlan(editingPlan.id, { ...editingPlan, assigneeMemberIds: parseAssigneesFromText(asText(editingPlan.description)) });
-                  setEditingPlan(null);
-                  await loadData();
-                } catch (err) {
-                  setPageError(err instanceof Error ? err.message : "保存家庭计划失败");
-                }
-              }} className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">保存</button>
-            </div>
-          </div>
-        </div>
       )}
 
       {editingFamilyInfo && (
