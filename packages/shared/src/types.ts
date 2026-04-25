@@ -6,6 +6,7 @@ export interface Message {
   name?: string;
   toolCallId?: string;
   toolCalls?: ToolCall[];
+  reasoningContent?: string;
 }
 
 export interface ToolCall {
@@ -77,6 +78,7 @@ export interface MultimodalMessage {
   name?: string;
   toolCallId?: string;
   toolCalls?: ToolCall[];
+  reasoningContent?: string;
   media?: MediaContent[];
   references?: ReferenceContent[];
 }

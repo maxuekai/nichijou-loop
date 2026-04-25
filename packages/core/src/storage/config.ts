@@ -6,6 +6,7 @@ export interface LLMConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  thinkingMode?: boolean;
 }
 
 export interface LLMModelConfig {
@@ -16,6 +17,7 @@ export interface LLMModelConfig {
   apiKey: string;          // API密钥
   model: string;           // 模型名称
   timeout?: number;        // 超时设置
+  thinkingMode?: boolean;  // 是否启用思考模式，需要回传 reasoning_content
   enabled: boolean;        // 是否启用
   isDefault: boolean;      // 是否为默认模型
   createdAt: string;       // 创建时间
@@ -126,6 +128,7 @@ export class ConfigManager {
         baseUrl: config.llm.baseUrl,
         apiKey: config.llm.apiKey,
         model: config.llm.model,
+        thinkingMode: config.llm.thinkingMode ?? false,
         enabled: true,
         isDefault: true,
         createdAt: new Date().toISOString()

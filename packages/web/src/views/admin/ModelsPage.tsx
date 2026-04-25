@@ -34,6 +34,7 @@ interface LLMModelConfig {
   apiKey: string;
   model: string;
   timeout?: number;
+  thinkingMode?: boolean;
   enabled: boolean;
   isDefault: boolean;
   createdAt: string;
@@ -141,6 +142,7 @@ export function ModelsPage() {
     apiKey: "",
     model: "",
     timeout: 30000,
+    thinkingMode: false,
     enabled: true,
     isDefault: false,
   });
@@ -199,6 +201,7 @@ export function ModelsPage() {
         baseUrl: preset.baseUrl,
         model: preset.model,
         apiKey: prev.apiKey, // 保留已输入的 API Key
+        thinkingMode: false,
       }));
     }
   }
@@ -217,6 +220,7 @@ export function ModelsPage() {
         apiKey: "",
         model: "",
         timeout: 30000,
+        thinkingMode: false,
         enabled: true,
         isDefault: false,
       });
@@ -313,6 +317,7 @@ export function ModelsPage() {
       apiKey: "",
       model: "",
       timeout: 30000,
+      thinkingMode: false,
       enabled: true,
       isDefault: false,
     });
@@ -473,6 +478,15 @@ export function ModelsPage() {
                 />
                 <span className="text-sm text-stone-700">设为默认模型</span>
               </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newModelData.thinkingMode}
+                  onChange={(e) => setNewModelData(prev => ({ ...prev, thinkingMode: e.target.checked }))}
+                  className="w-4 h-4 text-amber-600 border-stone-300 rounded focus:ring-amber-500"
+                />
+                <span className="text-sm text-stone-700">思考模式</span>
+              </label>
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-stone-100">
@@ -571,7 +585,7 @@ export function ModelsPage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-4">
+                      <div className="grid grid-cols-4 gap-4">
                         <div>
                           <h4 className="text-xs font-medium text-stone-500 mb-1">模型名称</h4>
                           <p className="text-sm text-stone-800 font-mono bg-stone-100 px-2 py-1 rounded">{model.model}</p>
@@ -586,6 +600,12 @@ export function ModelsPage() {
                           <h4 className="text-xs font-medium text-stone-500 mb-1">创建时间</h4>
                           <p className="text-sm text-stone-800 bg-stone-100 px-2 py-1 rounded">
                             {new Date(model.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-medium text-stone-500 mb-1">思考模式</h4>
+                          <p className="text-sm text-stone-800 bg-stone-100 px-2 py-1 rounded">
+                            {model.thinkingMode ? "开启" : "关闭"}
                           </p>
                         </div>
                       </div>
@@ -750,6 +770,15 @@ export function ModelsPage() {
                             className="w-4 h-4 text-amber-600 border-stone-300 rounded focus:ring-amber-500"
                           />
                           <span className="text-sm text-stone-700">设为默认模型</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={editingData.thinkingMode ?? false}
+                            onChange={(e) => setEditingData(prev => ({ ...prev, thinkingMode: e.target.checked }))}
+                            className="w-4 h-4 text-amber-600 border-stone-300 rounded focus:ring-amber-500"
+                          />
+                          <span className="text-sm text-stone-700">思考模式</span>
                         </label>
                       </div>
 

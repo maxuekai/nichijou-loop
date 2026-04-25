@@ -5,6 +5,7 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   timeout?: number;
+  thinkingMode?: boolean;
 }
 
 export interface ChatRequest {

@@ -36,6 +36,7 @@ export const api = {
       apiKey: string;
       model: string;
       timeout?: number;
+      thinkingMode?: boolean;
       enabled: boolean;
       isDefault: boolean;
       createdAt: string;
@@ -50,6 +51,7 @@ export const api = {
     apiKey: string;
     model: string;
     timeout?: number;
+    thinkingMode?: boolean;
     enabled: boolean;
     isDefault: boolean;
   }) => request<{ ok: boolean; id: string }>("/models", { method: "POST", body: JSON.stringify(config) }),
@@ -60,6 +62,7 @@ export const api = {
     apiKey: string;
     model: string;
     timeout?: number;
+    thinkingMode?: boolean;
     enabled: boolean;
     isDefault: boolean;
   }>) => request<{ ok: boolean }>(`/models/${id}`, { method: "PUT", body: JSON.stringify(updates) }),
@@ -72,6 +75,7 @@ export const api = {
     apiKey: string;
     model: string;
     timeout?: number;
+    thinkingMode?: boolean;
     enabled: boolean;
     isDefault: boolean;
     createdAt: string;

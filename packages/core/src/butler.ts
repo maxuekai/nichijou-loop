@@ -194,7 +194,8 @@ export class ButlerService {
           baseUrl: model.baseUrl,
           apiKey: model.apiKey,
           model: model.model,
-          timeout: model.timeout
+          timeout: model.timeout,
+          thinkingMode: model.thinkingMode,
         });
       }
     }
@@ -207,7 +208,8 @@ export class ButlerService {
           baseUrl: agentModel.baseUrl,
           apiKey: agentModel.apiKey,
           model: agentModel.model,
-          timeout: agentModel.timeout
+          timeout: agentModel.timeout,
+          thinkingMode: agentModel.thinkingMode,
         });
       }
     }
@@ -220,7 +222,8 @@ export class ButlerService {
           baseUrl: activeModel.baseUrl,
           apiKey: activeModel.apiKey,
           model: activeModel.model,
-          timeout: activeModel.timeout
+          timeout: activeModel.timeout,
+          thinkingMode: activeModel.thinkingMode,
         });
         this.actionExecutor.setProvider(this.provider);
       }

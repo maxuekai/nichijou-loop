@@ -176,7 +176,8 @@ export class ModelManager {
         baseUrl: modelConfig.baseUrl,
         apiKey: modelConfig.apiKey,
         model: modelConfig.model,
-        timeout: modelConfig.timeout
+        timeout: modelConfig.timeout,
+        thinkingMode: modelConfig.thinkingMode,
       });
 
       // 发送一个简单的测试消息
@@ -212,6 +213,7 @@ export class ModelManager {
         baseUrl: cfg.llm.baseUrl,
         apiKey: cfg.llm.apiKey,
         model: cfg.llm.model,
+        thinkingMode: cfg.llm.thinkingMode ?? false,
         enabled: true,
         isDefault: true,
         createdAt: new Date().toISOString()

@@ -24,6 +24,7 @@ interface OpenAIMessage {
   name?: string;
   tool_call_id?: string;
   tool_calls?: OpenAIToolCall[];
+  reasoning_content?: string;
 }
 
 interface OpenAIToolCall {
@@ -106,7 +107,7 @@ async function mediaContentToParts(mediaList: MediaContent[]): Promise<OpenAICon
   return parts;
 }
 
-async function toOpenAIMessages(messages: (Message | MultimodalMessage)[]): Promise<OpenAIMessage[]> {
+async function toOpenAIMessages(messages: (Message | MultimodalMessage)[], includeReasoningContent = false): Promise<OpenAIMessage[]> {
   const result: OpenAIMessage[] = [];
   
   for (const m of messages) {
@@ -117,6 +118,9 @@ async function toOpenAIMessages(messages: (Message | MultimodalMessage)[]): Prom
     if (m.toolCallId) msg.tool_call_id = m.toolCallId;
     if (m.toolCalls && m.toolCalls.length > 0) {
       msg.tool_calls = m.toolCalls;
+    }
+    if (includeReasoningContent && m.role === "assistant" && m.reasoningContent) {
+      msg.reasoning_content = m.reasoningContent;
     }
     
     // 处理内容
@@ -166,6 +170,9 @@ function fromOpenAIMessage(choice: Record<string, unknown>): Message {
     role: msg.role as Message["role"],
     content: (msg.content as string) ?? "",
   };
+  if (typeof msg.reasoning_content === "string" && msg.reasoning_content) {
+    result.reasoningContent = msg.reasoning_content;
+  }
   if (msg.tool_calls) {
     result.toolCalls = msg.tool_calls as ToolCall[];
   }
@@ -221,8 +228,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     const accumulated: {
       content: string;
+      reasoningContent: string;
       toolCalls: Map<number, { id: string; name: string; arguments: string }>;
-    } = { content: "", toolCalls: new Map() };
+    } = { content: "", reasoningContent: "", toolCalls: new Map() };
     let finishReason = "stop";
     let usage: Usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
@@ -265,6 +273,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
             accumulated.content += delta.content;
             yield { type: "text_delta", delta: delta.content };
           }
+          if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+            accumulated.reasoningContent += delta.reasoning_content;
+          }
 
           if (delta.tool_calls) {
             for (const tc of delta.tool_calls as Record<string, unknown>[]) {
@@ -301,6 +312,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
       role: "assistant",
       content: accumulated.content,
     };
+    if (accumulated.reasoningContent) {
+      message.reasoningContent = accumulated.reasoningContent;
+    }
     if (accumulated.toolCalls.size > 0) {
       message.toolCalls = [...accumulated.toolCalls.values()].map((tc) => ({
         id: tc.id,
@@ -318,7 +332,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   ): Promise<Record<string, unknown>> {
     const body: Record<string, unknown> = {
       model: request.model ?? this.config.model,
-      messages: await toOpenAIMessages(request.messages),
+      messages: await toOpenAIMessages(request.messages, this.config.thinkingMode === true),
       stream,
     };
     if (request.temperature !== undefined) body.temperature = request.temperature;
