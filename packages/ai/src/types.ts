@@ -1,4 +1,4 @@
-import type { Message, ToolDefinition } from "@nichijou/shared";
+import type { ConversationMessage, Message, ToolDefinition } from "@nichijou/shared";
 
 export interface ProviderConfig {
   provider?: string;
@@ -12,7 +12,7 @@ export interface ProviderConfig {
 
 export interface ChatRequest {
   model?: string;
-  messages: Message[];
+  messages: ConversationMessage[];
   tools?: ToolDefinition[];
   temperature?: number;
   maxTokens?: number;

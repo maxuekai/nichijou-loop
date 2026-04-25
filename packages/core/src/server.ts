@@ -47,6 +47,9 @@ const MEDIA_MIME_TYPES: Record<string, string> = {
 };
 
 const THUMBNAIL_IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const AVATAR_IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const MAX_AVATAR_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_AVATAR_REQUEST_BYTES = Math.ceil(MAX_AVATAR_IMAGE_BYTES * 4 / 3) + 4096;
 
 const CONFIG_PATCH_KEYS = new Set([
   "llm",
@@ -1285,7 +1288,9 @@ export class NichijouServer {
         try {
           const { buffer, ext } = await this.readAvatarUpload(req);
           const filename = `${memberId}${ext}`;
-          this.butler.storage.writeBinary(`media/avatars/${filename}`, buffer);
+          const storagePath = this.avatarStoragePath(filename);
+          if (!storagePath) throw new Error("Invalid avatar filename");
+          this.butler.storage.writeBinary(storagePath, buffer);
           this.butler.familyManager.updateMember(memberId, { avatar: filename });
           this.json(res, { ok: true, avatar: filename });
         } catch (err) {
@@ -1296,8 +1301,17 @@ export class NichijouServer {
       }
 
       if (path.match(/^\/api\/avatars\/[^/]+$/) && method === "GET") {
-        const filename = decodeURIComponent(path.split("/")[3]!);
-        const data = this.butler.storage.readBinary(`media/avatars/${filename}`);
+        const filename = this.normalizeAvatarFilename(path.split("/")[3]!);
+        if (!filename) {
+          this.json(res, { error: "Invalid avatar filename" }, 400);
+          return;
+        }
+        const storagePath = this.avatarStoragePath(filename);
+        if (!storagePath) {
+          this.json(res, { error: "Invalid avatar filename" }, 400);
+          return;
+        }
+        const data = this.butler.storage.readBinary(storagePath);
         if (!data) {
           res.writeHead(404);
           res.end("Not found");
@@ -1314,7 +1328,9 @@ export class NichijouServer {
         try {
           const { buffer, ext } = await this.readAvatarUpload(req);
           const filename = `butler${ext}`;
-          this.butler.storage.writeBinary(`media/avatars/${filename}`, buffer);
+          const storagePath = this.avatarStoragePath(filename);
+          if (!storagePath) throw new Error("Invalid avatar filename");
+          this.butler.storage.writeBinary(storagePath, buffer);
           this.json(res, { ok: true, avatar: filename });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -1327,7 +1343,9 @@ export class NichijouServer {
         try {
           const { buffer, ext } = await this.readAvatarUpload(req);
           const filename = `family${ext}`;
-          this.butler.storage.writeBinary(`media/avatars/${filename}`, buffer);
+          const storagePath = this.avatarStoragePath(filename);
+          if (!storagePath) throw new Error("Invalid avatar filename");
+          this.butler.storage.writeBinary(storagePath, buffer);
           const family = this.butler.familyManager.updateFamily({ avatar: filename });
           this.json(res, { ok: true, avatar: filename, family });
         } catch (err) {
@@ -1433,33 +1451,121 @@ export class NichijouServer {
     return patch;
   }
 
+  private normalizeAvatarExtension(ext: string): string | null {
+    const normalized = ext.toLowerCase() === ".jpeg" ? ".jpg" : ext.toLowerCase();
+    return AVATAR_IMAGE_EXT.has(normalized) ? normalized : null;
+  }
+
+  private avatarExtensionFromContentType(contentType: string): string | null {
+    const mime = contentType.toLowerCase().split(";")[0]?.trim();
+    if (mime === "image/jpeg" || mime === "image/jpg") return ".jpg";
+    if (mime === "image/png") return ".png";
+    if (mime === "image/gif") return ".gif";
+    if (mime === "image/webp") return ".webp";
+    return null;
+  }
+
+  private normalizeAvatarFilename(raw: string): string | null {
+    let filename: string;
+    try {
+      filename = decodeURIComponent(raw).trim();
+    } catch {
+      return null;
+    }
+
+    if (
+      !filename
+      || filename.length > 128
+      || filename.includes("..")
+      || /[/\\\0%]/.test(filename)
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(filename)
+    ) {
+      return null;
+    }
+
+    const originalExt = extname(filename);
+    const ext = this.normalizeAvatarExtension(originalExt);
+    if (!ext) return null;
+    return filename;
+  }
+
+  private avatarStoragePath(raw: string): string | null {
+    const filename = this.normalizeAvatarFilename(raw);
+    if (!filename) return null;
+
+    const avatarRoot = pathResolve(this.butler.storage.resolve("media/avatars"));
+    const fullPath = pathResolve(avatarRoot, filename);
+    if (fullPath === avatarRoot || !fullPath.startsWith(avatarRoot + sep)) {
+      return null;
+    }
+    return `media/avatars/${filename}`;
+  }
+
+  private assertAvatarSize(buffer: Buffer): void {
+    if (buffer.length > MAX_AVATAR_IMAGE_BYTES) {
+      throw new Error(`Avatar image exceeds ${(MAX_AVATAR_IMAGE_BYTES / 1024 / 1024).toFixed(0)}MB`);
+    }
+  }
+
   private readAvatarUpload(req: IncomingMessage): Promise<{ buffer: Buffer; ext: string }> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      let totalBytes = 0;
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+        req.destroy();
+      };
+
+      req.on("data", (chunk: Buffer) => {
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_AVATAR_REQUEST_BYTES) {
+          fail(new Error(`Avatar upload request exceeds ${(MAX_AVATAR_IMAGE_BYTES / 1024 / 1024).toFixed(0)}MB image limit`));
+          return;
+        }
+        chunks.push(chunk);
+      });
       req.on("end", () => {
+        if (settled) return;
+        settled = true;
         try {
           const raw = Buffer.concat(chunks);
-          const ct = req.headers["content-type"] ?? "";
+          const ct = String(req.headers["content-type"] ?? "");
           if (ct.includes("application/json")) {
             const body = JSON.parse(raw.toString()) as { data: string; filename?: string };
-            const match = body.data.match(/^data:image\/(\w+);base64,(.+)$/);
+            const match = body.data.match(/^data:image\/([a-zA-Z0-9.+-]+);base64,(.+)$/);
             if (!match) {
               reject(new Error("Invalid base64 data URL"));
               return;
             }
-            const imgExt = match[1] === "jpeg" ? ".jpg" : `.${match[1]}`;
+            const imgExt = this.normalizeAvatarExtension(match[1] === "jpeg" ? ".jpg" : `.${match[1]}`);
+            if (!imgExt) {
+              reject(new Error("Unsupported avatar image type"));
+              return;
+            }
             const buffer = Buffer.from(match[2]!, "base64");
+            this.assertAvatarSize(buffer);
             resolve({ buffer, ext: imgExt });
           } else {
-            const ext = ct.includes("png") ? ".png" : ct.includes("gif") ? ".gif" : ct.includes("webp") ? ".webp" : ".jpg";
+            const ext = this.avatarExtensionFromContentType(ct);
+            if (!ext) {
+              reject(new Error("Unsupported avatar image type"));
+              return;
+            }
+            this.assertAvatarSize(raw);
             resolve({ buffer: raw, ext });
           }
         } catch (err) {
           reject(err);
         }
       });
-      req.on("error", reject);
+      req.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      });
     });
   }
 }

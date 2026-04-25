@@ -1,4 +1,4 @@
-import type { Message, ToolCall, ToolDefinition, MultimodalMessage, MediaContent } from "@nichijou/shared";
+import type { ConversationMessage, Message, ToolCall, ToolDefinition, MultimodalMessage, MediaContent } from "@nichijou/shared";
 import { LLMError } from "@nichijou/shared";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
@@ -108,7 +108,30 @@ async function mediaContentToParts(mediaList: MediaContent[]): Promise<OpenAICon
   return parts;
 }
 
-async function toOpenAIMessages(messages: (Message | MultimodalMessage)[]): Promise<OpenAIMessage[]> {
+function hasImageInput(messages: ConversationMessage[]): boolean {
+  return messages.some((message) => {
+    if ('media' in message && message.media?.some((media) => media.type === 'image')) {
+      return true;
+    }
+    return Array.isArray(message.content) && message.content.some((part) => part.type === 'image_url');
+  });
+}
+
+function supportsImageInput(config: ProviderConfig): boolean {
+  if (isDeepSeekProvider(config)) return false;
+
+  const provider = config.provider?.toLowerCase() ?? "";
+  const baseUrl = config.baseUrl.toLowerCase();
+  const model = config.model.toLowerCase();
+
+  if (provider.includes("openai") || baseUrl.includes("api.openai.com")) {
+    return /(^|[-_.])gpt-4o|gpt-4\.1|gpt-4-turbo|o[34](-|$)|vision/.test(model);
+  }
+
+  return /vision|vl|qwen.*vl|llava|gpt-4o|gpt-4\.1|gpt-4-turbo|gemini|claude-3|o[34](-|$)/.test(model);
+}
+
+async function toOpenAIMessages(messages: ConversationMessage[]): Promise<OpenAIMessage[]> {
   const result: OpenAIMessage[] = [];
   
   for (const m of messages) {
@@ -149,6 +172,14 @@ async function toOpenAIMessages(messages: (Message | MultimodalMessage)[]): Prom
   }
   
   return result;
+}
+
+function assertSupportedInputs(config: ProviderConfig, messages: ConversationMessage[]): void {
+  if (hasImageInput(messages) && !supportsImageInput(config)) {
+    throw new LLMError(
+      `当前模型 ${config.model} 不支持图片理解。请切换到支持视觉输入的模型后再发送图片。`,
+    );
+  }
 }
 
 function isDeepSeekProvider(config: ProviderConfig): boolean {
@@ -389,6 +420,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   ): Promise<Record<string, unknown>> {
     const deepSeek = isDeepSeekProvider(this.config);
     const thinkingEnabled = this.config.thinkingMode === true;
+    assertSupportedInputs(this.config, request.messages);
     const messages = await toOpenAIMessages(request.messages);
     const body: Record<string, unknown> = {
       model: request.model ?? this.config.model,

@@ -67,6 +67,9 @@ export class PluginHost {
     for (const plugin of this.plugins.values()) {
       const tool = plugin.tools.find((t) => t.name === toolName);
       if (tool) {
+        if (!this.isEnabled(plugin.id)) {
+          return { content: `Tool disabled: ${toolName}`, isError: true };
+        }
         const config = this.pluginConfigs.get(plugin.id) ?? {};
         const merged = { ...config, ...params };
         return tool.execute(merged);

@@ -1,12 +1,12 @@
 import type { LLMProvider, StreamEvent, Usage } from "@nichijou/ai";
-import type { Message, ToolDefinition } from "@nichijou/shared";
+import type { ConversationMessage, Message, ToolDefinition } from "@nichijou/shared";
 import type { AgentEvent } from "./events.js";
 import { ToolRunner } from "./tool-runner.js";
 
 const DEFAULT_MAX_TURNS = 10;
 
-function toConversationHistoryMessage(message: Message): Message {
-  const historyMessage: Message = { ...message };
+function toConversationHistoryMessage(message: ConversationMessage): ConversationMessage {
+  const historyMessage: ConversationMessage = { ...message };
   delete historyMessage.reasoningContent;
   return historyMessage;
 }
@@ -39,7 +39,7 @@ export class AgentLoop {
     this.toolRunner.setTools(tools);
   }
 
-  async *run(messages: Message[]): AsyncIterable<AgentEvent> {
+  async *run(messages: ConversationMessage[]): AsyncIterable<AgentEvent> {
     let turns = 0;
 
     while (turns < this.maxTurns) {

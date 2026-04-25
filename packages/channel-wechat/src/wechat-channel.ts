@@ -308,15 +308,29 @@ export class WeChatChannel implements Channel {
         // Unbound connection: fallback to simple text extraction for binding flow
         const text = WeChatClient.extractText(msg);
         if (!text) return;
-        
-        await this.gateway.handleUnboundInbound(
-          "wechat",
-          connId!,
-          text,
-          async (reply: string) => {
-            await client.sendText(fromUserId, reply);
-          },
-        );
+
+        try {
+          if (!connId || !conn) {
+            await client.sendText(fromUserId, "当前微信连接已失效，请在管理后台重新扫码后再绑定。");
+            return;
+          }
+
+          await this.gateway.handleUnboundInbound(
+            "wechat",
+            connId,
+            text,
+            async (reply: string) => {
+              await client.sendText(fromUserId, reply);
+            },
+          );
+        } catch (error) {
+          console.error(`[WeChat] 处理未绑定消息失败 (${connId ?? "unknown"}):`, error);
+          try {
+            await client.sendText(fromUserId, "当前微信连接处理失败，请在管理后台重新扫码后再试。");
+          } catch {
+            // ignore reply failure
+          }
+        }
         return;
       }
 

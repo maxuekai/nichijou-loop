@@ -10,6 +10,38 @@ export class ModelManager {
     private decorateProvider: (provider: LLMProvider) => LLMProvider = (provider) => provider,
   ) {}
 
+  private describeBaseUrl(baseUrl?: string): string {
+    if (!baseUrl) return "";
+    try {
+      const parsed = new URL(baseUrl);
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      return baseUrl.replace(/([?&](?:api[-_]?key|token|secret)=)[^&]+/gi, "$1[REDACTED]");
+    }
+  }
+
+  private describeModelConfig(model: Partial<LLMModelConfig>): Record<string, unknown> {
+    return {
+      id: model.id,
+      name: model.name,
+      provider: model.provider,
+      baseUrl: this.describeBaseUrl(model.baseUrl),
+      model: model.model,
+      enabled: model.enabled,
+      isDefault: model.isDefault,
+      hasApiKey: Boolean(model.apiKey),
+    };
+  }
+
+  private describeLegacyConfig(llm: LLMModelConfig | { baseUrl?: string; apiKey?: string; model?: string; thinkingMode?: boolean }): Record<string, unknown> {
+    return {
+      baseUrl: this.describeBaseUrl(llm.baseUrl),
+      model: llm.model,
+      thinkingMode: llm.thinkingMode,
+      hasApiKey: Boolean(llm.apiKey),
+    };
+  }
+
   /**
    * 获取所有模型配置
    */
@@ -211,7 +243,7 @@ export class ModelManager {
     
     // 如果存在旧的 llm 配置但没有新的 models 配置，进行迁移
     if (cfg.llm && !cfg.models) {
-      console.log("[ModelManager] Migrating legacy config:", cfg.llm);
+      console.log("[ModelManager] Migrating legacy config:", this.describeLegacyConfig(cfg.llm));
       const legacyModel: LLMModelConfig = {
         id: 'legacy-default',
         name: '默认模型',
@@ -230,11 +262,17 @@ export class ModelManager {
         activeModelId: legacyModel.id
       };
 
-      console.log("[ModelManager] Created models config:", modelsConfig);
+      console.log("[ModelManager] Created models config:", {
+        activeModelId: modelsConfig.activeModelId,
+        models: modelsConfig.models.map((model) => this.describeModelConfig(model)),
+      });
       this.config.update({ models: modelsConfig });
       console.log("[ModelManager] Migration completed");
     } else if (cfg.models) {
-      console.log("[ModelManager] Models config already exists:", cfg.models);
+      console.log("[ModelManager] Models config already exists:", {
+        activeModelId: cfg.models.activeModelId,
+        models: cfg.models.models.map((model) => this.describeModelConfig(model)),
+      });
     } else {
       console.log("[ModelManager] No llm config found, no migration needed");
     }

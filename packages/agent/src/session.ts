@@ -1,9 +1,9 @@
-import type { Message } from "@nichijou/shared";
+import type { ConversationMessage } from "@nichijou/shared";
 import { AgentLoop } from "./loop.js";
 import type { AgentEvent, AgentSessionOptions, SessionState } from "./events.js";
 
-function toConversationHistoryMessage(message: Message): Message {
-  const historyMessage: Message = { ...message };
+function toConversationHistoryMessage(message: ConversationMessage): ConversationMessage {
+  const historyMessage: ConversationMessage = { ...message };
   delete historyMessage.reasoningContent;
   return historyMessage;
 }
@@ -55,8 +55,11 @@ export class AgentSession {
     }
   }
 
-  async prompt(input: string): Promise<string> {
-    this._state.messages.push({ role: "user", content: input });
+  async prompt(input: string | ConversationMessage): Promise<string> {
+    const userMessage: ConversationMessage = typeof input === "string"
+      ? { role: "user", content: input }
+      : input;
+    this._state.messages.push(toConversationHistoryMessage(userMessage));
 
     let fullResponse = "";
 
@@ -77,7 +80,7 @@ export class AgentSession {
     }
   }
 
-  replaceMessages(messages: Message[], systemPrompt?: string): void {
+  replaceMessages(messages: ConversationMessage[], systemPrompt?: string): void {
     const nextMessages = messages.map(toConversationHistoryMessage);
     const prompt = systemPrompt ?? this._state.systemPrompt;
 
@@ -86,7 +89,8 @@ export class AgentSession {
     }
 
     this._state.messages = nextMessages;
-    this._state.systemPrompt = systemPrompt ?? nextMessages[0]!.content;
+    const firstContent = nextMessages[0]!.content;
+    this._state.systemPrompt = systemPrompt ?? (typeof firstContent === "string" ? firstContent : prompt);
   }
 
   updateTools(tools: AgentSessionOptions["tools"] = []): void {
@@ -95,7 +99,7 @@ export class AgentSession {
     this.loop.updateTools(nextTools);
   }
 
-  getMessages(): Message[] {
+  getMessages(): ConversationMessage[] {
     return this._state.messages.map(toConversationHistoryMessage);
   }
 

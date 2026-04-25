@@ -12,6 +12,8 @@ import type {
   FamilyMember, 
   InboundMessage, 
   Message,
+  ConversationMessage,
+  MultimodalMessage,
   ToolDefinition, 
   Routine, 
   RoutineAction, 
@@ -255,6 +257,20 @@ export class ButlerService {
       const maybeProvider = provider as unknown as {
         buildRequestBody?: (request: ChatRequest, stream: boolean) => Promise<Record<string, unknown>>;
       };
+      const redactDataUrls = (value: unknown): unknown => {
+        if (typeof value === "string") {
+          return value.replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/gi, "data:image/[REDACTED];base64,[REDACTED]");
+        }
+        if (Array.isArray(value)) {
+          return value.map(redactDataUrls);
+        }
+        if (value && typeof value === "object") {
+          return Object.fromEntries(
+            Object.entries(value as Record<string, unknown>).map(([key, child]) => [key, redactDataUrls(child)]),
+          );
+        }
+        return value;
+      };
       if (!maybeProvider.buildRequestBody) {
         return { config: provider.config, request };
       }
@@ -262,7 +278,7 @@ export class ButlerService {
         return {
           config: provider.config,
           request,
-          apiRequestBody: await maybeProvider.buildRequestBody(request, stream),
+          apiRequestBody: redactDataUrls(await maybeProvider.buildRequestBody(request, stream)),
         };
       } catch (error) {
         return {
@@ -629,8 +645,10 @@ export class ButlerService {
     console.log(`[ContextManager] 压缩了 ${oldMessages.length} 条历史消息，保留了 ${recentMessages.length} 条最近消息，memberId: ${memberId}`);
   }
 
-  private isSessionSummaryMessage(message: Message): boolean {
-    return message.role === "system" && message.content.startsWith(ButlerService.SESSION_SUMMARY_TITLE);
+  private isSessionSummaryMessage(message: ConversationMessage): boolean {
+    return message.role === "system"
+      && typeof message.content === "string"
+      && message.content.startsWith(ButlerService.SESSION_SUMMARY_TITLE);
   }
 
   private createSessionSummaryMessage(summary: string): Message {
@@ -640,24 +658,28 @@ export class ButlerService {
     };
   }
 
-  private getSessionSummaryContent(messages: Message[]): string | null {
+  private getSessionSummaryContent(messages: ConversationMessage[]): string | null {
     const summary = messages.find((message) => this.isSessionSummaryMessage(message));
     if (!summary) return null;
-    return summary.content.slice(ButlerService.SESSION_SUMMARY_TITLE.length).trim();
+    return typeof summary.content === "string"
+      ? summary.content.slice(ButlerService.SESSION_SUMMARY_TITLE.length).trim()
+      : null;
   }
 
-  private normalizeSessionMessages(messages: Message[], systemPrompt: string): Message[] {
+  private normalizeSessionMessages(messages: ConversationMessage[], systemPrompt: string): ConversationMessage[] {
     const summaries: string[] = [];
-    const nonSystemMessages: Message[] = [];
+    const nonSystemMessages: ConversationMessage[] = [];
 
     for (const message of messages) {
       if (this.isSessionSummaryMessage(message)) {
-        const content = message.content.slice(ButlerService.SESSION_SUMMARY_TITLE.length).trim();
+        const content = typeof message.content === "string"
+          ? message.content.slice(ButlerService.SESSION_SUMMARY_TITLE.length).trim()
+          : "";
         if (content) summaries.push(content);
         continue;
       }
 
-      if (message.role === "system") {
+      if (message.role === "system" && typeof message.content === "string") {
         const legacy = this.extractLegacySessionSummary(message.content);
         if (legacy) summaries.push(legacy);
         continue;
@@ -666,7 +688,7 @@ export class ButlerService {
       nonSystemMessages.push(message);
     }
 
-    const normalized: Message[] = [{ role: "system", content: systemPrompt }];
+    const normalized: ConversationMessage[] = [{ role: "system", content: systemPrompt }];
     if (summaries.length > 0) {
       normalized.push(this.createSessionSummaryMessage(summaries.join("\n\n")));
     }
@@ -685,7 +707,19 @@ export class ButlerService {
   /**
    * 生成对话摘要
    */
-  private async generateConversationSummary(messages: Message[], memberId: string): Promise<string> {
+  private messageContentToText(message: ConversationMessage): string {
+    if (typeof message.content === "string") return message.content;
+    return message.content
+      .map((part) => {
+        if (part.type === "text") return part.text;
+        if (part.type === "image_url") return "[图片]";
+        if (part.type === "audio") return "[音频]";
+        return "[多媒体]";
+      })
+      .join("\n");
+  }
+
+  private async generateConversationSummary(messages: ConversationMessage[], memberId: string): Promise<string> {
     const member = this.familyManager.getMember(memberId);
     const memberName = member?.preferredName || member?.name || "未知成员";
     
@@ -704,7 +738,7 @@ export class ButlerService {
           : msg.role === "tool"
             ? "工具结果"
             : "系统";
-      conversationText += `${speaker}: ${msg.content}\n`;
+      conversationText += `${speaker}: ${this.messageContentToText(msg)}\n`;
     }
 
     const summaryPrompt = `请对以下对话内容生成简洁的摘要，重点保留：
@@ -793,7 +827,7 @@ ${conversationText}
           content: chat.content,
         }));
 
-      let finalMessages = sessionData.messages as Message[];
+      let finalMessages = sessionData.messages as ConversationMessage[];
       
       if (newMessages.length > 0) {
         console.log(`[SessionPersistence] 发现 ${newMessages.length} 条新的历史消息，整合到会话中，memberId: ${memberId}`);
@@ -1224,6 +1258,9 @@ ${conversationText}
   async executeTool(toolName: string, params: Record<string, unknown>): Promise<{ content: string; isError?: boolean }> {
     for (const plugin of this.pluginHost.getAllPlugins()) {
       if (plugin.tools.some((t) => t.name === toolName)) {
+        if (!this.pluginHost.isEnabled(plugin.id)) {
+          return { content: `Tool disabled: ${toolName}`, isError: true };
+        }
         return this.pluginHost.executeTool(toolName, params);
       }
     }
@@ -1764,9 +1801,10 @@ ${conversationText}
    */
   private async buildEnhancedMessage(
     msg: InboundMessage,
-  ): Promise<{ message: string; processedMedia: ProcessedMediaInfo[] }> {
+  ): Promise<{ message: string; processedMedia: ProcessedMediaInfo[]; modelMedia: MediaContent[] }> {
     let enhancedMessage = "";
     const processedMedia: ProcessedMediaInfo[] = [];
+    const modelMedia: MediaContent[] = [];
 
     // 处理引用消息上下文
     if (msg.references && msg.references.length > 0) {
@@ -1776,8 +1814,9 @@ ${conversationText}
 
     // 处理媒体内容
     if (msg.mediaContent && msg.mediaContent.length > 0) {
-      const { context: mediaContext, processedMedia: fromMedia } = await this.buildMediaContext(msg.mediaContent);
+      const { context: mediaContext, processedMedia: fromMedia, modelMedia: fromModelMedia } = await this.buildMediaContext(msg.mediaContent);
       processedMedia.push(...fromMedia);
+      modelMedia.push(...fromModelMedia);
       if (mediaContext) {
         enhancedMessage += mediaContext + '\n\n';
       }
@@ -1786,7 +1825,7 @@ ${conversationText}
     // 添加用户文本消息
     enhancedMessage += msg.text;
 
-    return { message: enhancedMessage, processedMedia };
+    return { message: enhancedMessage, processedMedia, modelMedia };
   }
 
   /**
@@ -1820,8 +1859,9 @@ ${conversationText}
    */
   private async buildMediaContext(
     mediaContent: MediaContent[],
-  ): Promise<{ context: string; processedMedia: ProcessedMediaInfo[] }> {
+  ): Promise<{ context: string; processedMedia: ProcessedMediaInfo[]; modelMedia: MediaContent[] }> {
     const processedMedia: ProcessedMediaInfo[] = [];
+    const modelMedia: MediaContent[] = [];
     let context = '[媒体内容]\n';
 
     for (let index = 0; index < mediaContent.length; index++) {
@@ -1831,7 +1871,9 @@ ${conversationText}
       switch (media.type) {
         case 'image':
           context += `- 图片: ${media.originalName || '未知图片'}\n`;
-          // 这里可以添加图像识别或 OCR 结果
+          if (media.filePath) {
+            modelMedia.push(media);
+          }
           break;
           
         case 'voice':
@@ -1887,7 +1929,47 @@ ${conversationText}
       }
     }
     
-    return { context, processedMedia };
+    return { context, processedMedia, modelMedia };
+  }
+
+  private supportsImageUnderstanding(): boolean {
+    const activeModel = this.modelManager.getActiveModel();
+    const cfg = activeModel
+      ? {
+          provider: activeModel.provider,
+          baseUrl: activeModel.baseUrl,
+          model: activeModel.model,
+        }
+      : {
+          provider: undefined,
+          baseUrl: this.config.get().llm.baseUrl,
+          model: this.config.get().llm.model,
+        };
+
+    const provider = cfg.provider?.toLowerCase() ?? "";
+    const baseUrl = cfg.baseUrl.toLowerCase();
+    const model = cfg.model.toLowerCase();
+
+    if (provider === "deepseek" || baseUrl.includes("deepseek.com")) {
+      return false;
+    }
+    if (provider.includes("openai") || baseUrl.includes("api.openai.com")) {
+      return /(^|[-_.])gpt-4o|gpt-4\.1|gpt-4-turbo|o[34](-|$)|vision/.test(model);
+    }
+    return /vision|vl|qwen.*vl|llava|gpt-4o|gpt-4\.1|gpt-4-turbo|gemini|claude-3|o[34](-|$)/.test(model);
+  }
+
+  private imageUnsupportedMessage(): string {
+    return "当前模型不支持图片理解。请在模型设置中切换到支持视觉输入的模型后，再发送图片。";
+  }
+
+  private createPromptInput(message: string, modelMedia: MediaContent[]): string | MultimodalMessage {
+    if (modelMedia.length === 0) return message;
+    return {
+      role: "user",
+      content: message,
+      media: modelMedia,
+    };
   }
 
   /**
@@ -2080,10 +2162,12 @@ ${conversationText}
     const mediaStartedAt = Date.now();
     let enhancedMessage = "";
     let pipelineProcessed: ProcessedMediaInfo[] = [];
+    let modelMedia: MediaContent[] = [];
     try {
       const builtMessage = await this.buildEnhancedMessage(msg);
       enhancedMessage = builtMessage.message;
       pipelineProcessed = builtMessage.processedMedia;
+      modelMedia = builtMessage.modelMedia;
     } catch (error) {
       this.systemLogger.logError({
         source: "Butler.handleMessage",
@@ -2106,10 +2190,36 @@ ${conversationText}
       traceId,
     });
 
+    const model = this.config.get().llm.model;
+
+    if (modelMedia.length > 0 && !this.supportsImageUnderstanding()) {
+      const reply = this.imageUnsupportedMessage();
+      await this.stopTyping(member.id);
+      await this.gateway.sendToMember(member.id, reply);
+      this.systemLogger.logRuntime({
+        source: "Butler.handleMessage",
+        message: "Image message rejected because active model does not support vision",
+        input: { memberId: member.id, mediaCount: modelMedia.length },
+        details: { model },
+        traceId,
+      });
+      this.db.saveConversationLogWithMedia(
+        member.id,
+        member.name,
+        msg.text,
+        reply,
+        JSON.stringify([]),
+        msg.mediaContent || [],
+        pipelineProcessed,
+      );
+      this.db.saveChat(member.id, "user", msg.text);
+      this.db.saveChat(member.id, "assistant", reply);
+      return;
+    }
+
     const events: Array<{ type: string; data: unknown }> = [];
     const toolStarts = new Map<string, number[]>();
     let lastTurnText = "";
-    const model = this.config.get().llm.model;
 
     const unsubscribe = session.subscribe((event) => {
       events.push({ type: event.type, data: event });
@@ -2128,7 +2238,7 @@ ${conversationText}
     });
 
     try {
-      await session.prompt(enhancedMessage);
+      await session.prompt(this.createPromptInput(enhancedMessage, modelMedia));
     } catch (err) {
       // Stop typing on error
       await this.stopTyping(member.id);
@@ -3858,7 +3968,7 @@ ${conversationText}
       // 提取工具调用结果
       const messages = simpleSession.getMessages();
       for (const message of messages) {
-        if (message.role === "tool" && message.content) {
+        if (message.role === "tool" && typeof message.content === "string" && message.content) {
           try {
             const parsed = JSON.parse(message.content);
             return this.convertSimplifiedResult(parsed, description);

@@ -34,6 +34,7 @@ export class MultimediaMessageParser {
   private client: WeChatClient;
   private errorHandler: ErrorHandler;
   private downloadTaskManager: DownloadTaskManager;
+  private readonly downloadTimeoutMs = 60_000;
 
   constructor(config: MultimediaParserConfig, client: WeChatClient) {
     this.config = config;
@@ -152,11 +153,52 @@ export class MultimediaMessageParser {
     };
   }
 
+  private maxFileSizeBytes(): number {
+    return this.config.maxFileSize * 1024 * 1024;
+  }
+
+  private formatBytes(bytes: number): string {
+    return `${(bytes / 1024 / 1024).toFixed(2)}MB`;
+  }
+
+  private extractNumericSize(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return null;
+  }
+
+  private extractDeclaredMediaSizeBytes(item: any): number | null {
+    const containers = [
+      item,
+      item?.image_item,
+      item?.voice_item,
+      item?.video_item,
+      item?.file_item,
+    ];
+    const keys = ["size", "file_size", "fileSize", "total_size", "totalSize", "data_size", "dataSize"];
+
+    for (const container of containers) {
+      if (!container || typeof container !== "object") continue;
+      for (const key of keys) {
+        const size = this.extractNumericSize(container[key]);
+        if (size !== null) return size;
+      }
+    }
+
+    return null;
+  }
+
   /**
    * 处理媒体项
    */
   private async processMediaItem(item: any, messageId: string): Promise<MediaProcessingResult> {
     const mediaInfo = this.extractMediaInfo(item);
+    const declaredSize = this.extractDeclaredMediaSizeBytes(item);
     
     // 创建下载任务
     const downloadTask = this.downloadTaskManager.createTask(
@@ -164,10 +206,19 @@ export class MultimediaMessageParser {
       this.config.memberId,
       mediaInfo.type,
       mediaInfo.originalName || '未知文件',
-      0 // 初始时不知道文件大小
+      declaredSize ?? 0
     );
 
     try {
+      if (declaredSize !== null && declaredSize > this.maxFileSizeBytes()) {
+        const error = new Error(`文件大小 ${this.formatBytes(declaredSize)} 超过限制 ${this.config.maxFileSize}MB`);
+        this.downloadTaskManager.errorTask(downloadTask.id, error);
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+
       // 开始下载任务
       this.downloadTaskManager.startTask(downloadTask.id);
 
@@ -180,6 +231,12 @@ export class MultimediaMessageParser {
       }
 
       // 检查文件大小
+      if (!downloadResult.data || !Buffer.isBuffer(downloadResult.data)) {
+        const error = new Error('下载媒体文件数据无效');
+        this.downloadTaskManager.errorTask(downloadTask.id, error);
+        return { success: false, error: error.message };
+      }
+
       const sizeMB = downloadResult.data.length / (1024 * 1024);
       if (sizeMB > this.config.maxFileSize) {
         const error = new Error(`文件大小 ${sizeMB.toFixed(2)}MB 超过限制 ${this.config.maxFileSize}MB`);
@@ -235,6 +292,16 @@ export class MultimediaMessageParser {
     // 模拟进度更新（实际实现需要根据 wechat-ilink-client 的 API）
     // 由于 wechat-ilink-client 可能不直接支持进度回调，我们需要包装这个过程
     const downloadPromise = this.client.downloadMedia(item);
+    downloadPromise.catch(() => undefined);
+    let timeout: NodeJS.Timeout | undefined;
+    let abortHandler: (() => void) | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(`下载媒体文件超时（${Math.round(this.downloadTimeoutMs / 1000)}秒）`));
+      }, this.downloadTimeoutMs);
+      abortHandler = () => reject(new Error('下载任务已被取消'));
+      task.abortController.signal.addEventListener('abort', abortHandler, { once: true });
+    });
     
     // 启动一个模拟的进度更新
     let progressInterval: NodeJS.Timeout;
@@ -256,9 +323,11 @@ export class MultimediaMessageParser {
     progressInterval = setInterval(simulateProgress, 500);
 
     try {
-      const result = await downloadPromise;
+      const result = await Promise.race([downloadPromise, timeoutPromise]);
       isCompleted = true;
       clearInterval(progressInterval);
+      if (timeout) clearTimeout(timeout);
+      if (abortHandler) task.abortController.signal.removeEventListener('abort', abortHandler);
 
       // 最终更新进度为100%
       if (result && result.data) {
@@ -270,6 +339,8 @@ export class MultimediaMessageParser {
     } catch (error) {
       isCompleted = true;
       clearInterval(progressInterval);
+      if (timeout) clearTimeout(timeout);
+      if (abortHandler) task.abortController.signal.removeEventListener('abort', abortHandler);
       throw error;
     }
   }

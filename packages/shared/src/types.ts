@@ -83,6 +83,8 @@ export interface MultimodalMessage {
   references?: ReferenceContent[];
 }
 
+export type ConversationMessage = Message | MultimodalMessage;
+
 /** Family & member types */
 
 export interface Family {

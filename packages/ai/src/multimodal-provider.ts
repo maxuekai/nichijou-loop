@@ -1,5 +1,5 @@
 import type { 
-  Message, 
+  ConversationMessage,
   MultimodalMessage, 
   MediaContent, 
   MultimediaConfig 
@@ -25,7 +25,7 @@ export interface TranscriptionService {
 }
 
 /** 检测消息是否包含多媒体内容 */
-function hasMultimedia(message: Message | MultimodalMessage): boolean {
+function hasMultimedia(message: ConversationMessage): boolean {
   return 'media' in message && Boolean(message.media) && message.media!.length > 0;
 }
 
@@ -47,7 +47,7 @@ export class MultimodalProviderSelector {
   }
 
   /** 根据消息内容选择最佳的 LLM 提供商 */
-  selectProvider(messages: (Message | MultimodalMessage)[]): LLMProvider {
+  selectProvider(messages: ConversationMessage[]): LLMProvider {
     // 检查是否有多媒体内容
     const multimediaMessages = messages.filter(hasMultimedia) as MultimodalMessage[];
     
@@ -103,15 +103,14 @@ export class MultimodalProviderSelector {
   }
 
   /** 预处理消息，处理语音转录等 */
-  async preprocessMessages(messages: (Message | MultimodalMessage)[]): Promise<Message[]> {
-    const processed: Message[] = [];
+  async preprocessMessages(messages: ConversationMessage[]): Promise<ConversationMessage[]> {
+    const processed: ConversationMessage[] = [];
 
     for (const msg of messages) {
       if (!hasMultimedia(msg)) {
-        // 确保返回标准的 Message 格式
-        const standardMsg: Message = {
+        const standardMsg: ConversationMessage = {
           role: msg.role,
-          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+          content: msg.content,
           name: msg.name,
           toolCallId: msg.toolCallId,
           toolCalls: msg.toolCalls,
@@ -130,13 +129,15 @@ export class MultimodalProviderSelector {
         processedMsg = await this.transcribeVoiceMessage(processedMsg);
       }
 
-      // 转换为标准 Message 格式
-      const standardMsg: Message = {
+      const standardMsg: ConversationMessage = {
         role: processedMsg.role,
-        content: typeof processedMsg.content === 'string' ? processedMsg.content : JSON.stringify(processedMsg.content),
+        content: processedMsg.content,
         name: processedMsg.name,
         toolCallId: processedMsg.toolCallId,
         toolCalls: processedMsg.toolCalls,
+        reasoningContent: processedMsg.reasoningContent,
+        media: processedMsg.media,
+        references: processedMsg.references,
       };
 
       processed.push(standardMsg);

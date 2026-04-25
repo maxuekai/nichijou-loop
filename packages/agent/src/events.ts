@@ -1,5 +1,5 @@
 import type { LLMProvider, Usage } from "@nichijou/ai";
-import type { Message, ToolDefinition } from "@nichijou/shared";
+import type { ConversationMessage, Message, ToolDefinition } from "@nichijou/shared";
 
 export type AgentEvent =
   | { type: "text_delta"; delta: string }
@@ -13,7 +13,7 @@ export interface AgentSessionOptions {
   provider: LLMProvider;
   systemPrompt: string;
   tools?: ToolDefinition[];
-  messages?: Message[];
+  messages?: ConversationMessage[];
   maxTurns?: number;
   temperature?: number;
   maxTokens?: number;
@@ -21,7 +21,7 @@ export interface AgentSessionOptions {
 }
 
 export interface SessionState {
-  messages: Message[];
+  messages: ConversationMessage[];
   systemPrompt: string;
   tools: ToolDefinition[];
 }
