@@ -700,7 +700,7 @@ export class NichijouServer {
         try {
           const body = await this.readBody(req) as { baseUrl: string; apiKey: string; model: string };
           const { createProvider } = await import("@nichijou/ai");
-          const provider = createProvider(body);
+          const provider = createProvider({ ...body, timeZone: this.butler.config.get().timezone });
           const result = await provider.chat({
             messages: [{ role: "user", content: "Hi, respond with just 'OK'" }],
             maxTokens: 10,

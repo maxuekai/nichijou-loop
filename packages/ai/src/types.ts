@@ -7,6 +7,7 @@ export interface ProviderConfig {
   model: string;
   timeout?: number;
   thinkingMode?: boolean;
+  timeZone?: string;
 }
 
 export interface ChatRequest {

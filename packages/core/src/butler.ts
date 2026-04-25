@@ -11,14 +11,14 @@ import { getZonedDateTimeParts } from "@nichijou/shared";
 import type { 
   FamilyMember, 
   InboundMessage, 
+  Message,
   ToolDefinition, 
   Routine, 
   RoutineAction, 
   Plan,
   MediaContent,
   ProcessedMediaInfo,
-  ReferenceContent,
-  ThreadContext
+  ReferenceContent
 } from "@nichijou/shared";
 import { hostname, platform, arch, cpus, totalmem, freemem, uptime as osUptime, loadavg } from "node:os";
 import type { Channel } from "./gateway/channel.js";
@@ -41,7 +41,6 @@ import { PluginHost } from "./plugin-host/plugin-host.js";
 import { resolvePluginImportUrl } from "./plugins/resolve-plugin.js";
 import { ActionExecutor } from "./routine/action-executor.js";
 import { ModelManager } from "./services/model-manager.js";
-import { ThreadContextBuilder } from "./services/thread-context-builder.js";
 import { ErrorHandler } from "./services/error-handler.js";
 import type { AgentContext } from "./types/agent.js";
 
@@ -84,7 +83,6 @@ export class ButlerService {
   private _wechatChannel: WeChatChannelLike | null = null;
   private interviewSessions = new Map<string, Array<{ role: "user" | "assistant" | "system"; content: string }>>();
   private multimodalSelector?: MultimodalProviderSelector;
-  private threadContextBuilder: ThreadContextBuilder;
   private errorHandler: ErrorHandler;
 
   constructor(dataDir?: string) {
@@ -109,12 +107,6 @@ export class ButlerService {
 
     // 初始化多模态提供商选择器
     this.initializeMultimodalSelector();
-
-    // 初始化线程上下文构建器
-    this.threadContextBuilder = new ThreadContextBuilder({
-      database: this.db,
-      multimediaConfig: this.config.getMultimediaConfig(),
-    });
 
     // 初始化错误处理器
     this.errorHandler = new ErrorHandler({
@@ -186,6 +178,8 @@ export class ButlerService {
   }
 
   getProvider(context?: AgentContext): LLMProvider {
+    const timeZone = this.config.get().timezone || "Asia/Shanghai";
+
     // 如果指定了上下文中的模型ID，优先使用
     if (context?.preferredModelId) {
       const model = this.modelManager.getModelById(context.preferredModelId);
@@ -197,6 +191,7 @@ export class ButlerService {
           model: model.model,
           timeout: model.timeout,
           thinkingMode: model.thinkingMode,
+          timeZone,
         });
       }
     }
@@ -212,6 +207,7 @@ export class ButlerService {
           model: agentModel.model,
           timeout: agentModel.timeout,
           thinkingMode: agentModel.thinkingMode,
+          timeZone,
         });
       }
     }
@@ -227,6 +223,7 @@ export class ButlerService {
           model: activeModel.model,
           timeout: activeModel.timeout,
           thinkingMode: activeModel.thinkingMode,
+          timeZone,
         });
         this.actionExecutor.setProvider(this.provider);
       }
@@ -236,7 +233,7 @@ export class ButlerService {
     // 回退到旧的配置格式（向后兼容）
     if (!this.provider) {
       const cfg = this.config.get();
-      this.provider = createProvider(cfg.llm);
+      this.provider = createProvider({ ...cfg.llm, timeZone });
       this.actionExecutor.setProvider(this.provider);
     }
     return this.provider;
@@ -252,6 +249,7 @@ export class ButlerService {
   // 上下文管理配置
   private readonly MAX_CONTEXT_MESSAGES = 100; // 最大消息数
   private readonly KEEP_RECENT_MESSAGES = 30;   // 保留的最近消息数
+  private static readonly SESSION_SUMMARY_TITLE = "# 当前会话摘要";
   
   // 会话持久化配置
   private readonly SESSION_SAVE_INTERVAL = 30 * 1000; // 30秒保存一次会话状态
@@ -407,22 +405,19 @@ export class ButlerService {
    * 管理会话上下文长度，防止消息过多影响性能
    * 保留系统提示和最近的N轮对话，对超出部分进行压缩存储
    */
-  private async manageContextLength(session: any, memberId: string): Promise<void> {
+  private async manageContextLength(session: AgentSession, memberId: string): Promise<void> {
     const messages = session.getMessages();
-    
+
     if (messages.length <= this.MAX_CONTEXT_MESSAGES) {
       return; // 未超出限制，无需处理
     }
 
-    // 找到系统消息
-    const systemMessage = messages.find((msg: any) => msg.role === "system");
-    if (!systemMessage) {
-      console.warn(`[ContextManager] 未找到系统消息，memberId: ${memberId}`);
-      return;
-    }
+    const baseSystemPrompt = session.state.systemPrompt;
+    const baseSystemMessage: Message = { role: "system", content: baseSystemPrompt };
+    const existingSummary = this.getSessionSummaryContent(messages);
 
     // 保留最近的消息（排除系统消息）
-    const nonSystemMessages = messages.filter((msg: any) => msg.role !== "system");
+    const nonSystemMessages = messages.filter((msg) => msg.role !== "system");
     const recentMessages = nonSystemMessages.slice(-this.KEEP_RECENT_MESSAGES);
     const oldMessages = nonSystemMessages.slice(0, -this.KEEP_RECENT_MESSAGES);
 
@@ -430,47 +425,93 @@ export class ButlerService {
       return; // 没有需要压缩的旧消息
     }
 
-    // 生成对话摘要
-    const summary = await this.generateConversationSummary(oldMessages, memberId);
-    
-    // 创建摘要消息
-    const summaryMessage = {
-      role: "system" as const,
-      content: `# 对话历史摘要\n\n${summary}\n\n---\n\n${systemMessage.content}`,
-    };
+    const messagesToSummarize = existingSummary
+      ? [{ role: "system" as const, content: `${ButlerService.SESSION_SUMMARY_TITLE}\n\n${existingSummary}` }, ...oldMessages]
+      : oldMessages;
+    const summary = await this.generateConversationSummary(messagesToSummarize, memberId);
 
-    // 重构消息数组：摘要 + 最近消息
-    const newMessages = [summaryMessage, ...recentMessages];
-    
-    // 清除旧会话并创建新的
-    session.clearHistory();
-    session.updateSystemPrompt(summaryMessage.content);
-    
-    // 重新添加最近的消息到会话中
-    for (const msg of recentMessages) {
-      if (msg.role !== "system") {
-        // 注意：这里简化处理，实际可能需要更复杂的消息恢复逻辑
-        session.state.messages.push(msg);
-      }
-    }
+    const summaryMessage = this.createSessionSummaryMessage(summary);
+    const newMessages = [baseSystemMessage, summaryMessage, ...recentMessages];
+    session.replaceMessages(newMessages, baseSystemPrompt);
 
     console.log(`[ContextManager] 压缩了 ${oldMessages.length} 条历史消息，保留了 ${recentMessages.length} 条最近消息，memberId: ${memberId}`);
+  }
 
-    // 保存摘要到数据库
-    this.saveConversationSummary(memberId, oldMessages, summary);
+  private isSessionSummaryMessage(message: Message): boolean {
+    return message.role === "system" && message.content.startsWith(ButlerService.SESSION_SUMMARY_TITLE);
+  }
+
+  private createSessionSummaryMessage(summary: string): Message {
+    return {
+      role: "system",
+      content: `${ButlerService.SESSION_SUMMARY_TITLE}\n\n${summary.trim()}`,
+    };
+  }
+
+  private getSessionSummaryContent(messages: Message[]): string | null {
+    const summary = messages.find((message) => this.isSessionSummaryMessage(message));
+    if (!summary) return null;
+    return summary.content.slice(ButlerService.SESSION_SUMMARY_TITLE.length).trim();
+  }
+
+  private normalizeSessionMessages(messages: Message[], systemPrompt: string): Message[] {
+    const summaries: string[] = [];
+    const nonSystemMessages: Message[] = [];
+
+    for (const message of messages) {
+      if (this.isSessionSummaryMessage(message)) {
+        const content = message.content.slice(ButlerService.SESSION_SUMMARY_TITLE.length).trim();
+        if (content) summaries.push(content);
+        continue;
+      }
+
+      if (message.role === "system") {
+        const legacy = this.extractLegacySessionSummary(message.content);
+        if (legacy) summaries.push(legacy);
+        continue;
+      }
+
+      nonSystemMessages.push(message);
+    }
+
+    const normalized: Message[] = [{ role: "system", content: systemPrompt }];
+    if (summaries.length > 0) {
+      normalized.push(this.createSessionSummaryMessage(summaries.join("\n\n")));
+    }
+    normalized.push(...nonSystemMessages);
+    return normalized;
+  }
+
+  private extractLegacySessionSummary(content: string): string | null {
+    if (!content.startsWith("# 对话历史摘要")) return null;
+    const separator = "\n\n---\n\n";
+    const separatorIndex = content.indexOf(separator);
+    if (separatorIndex < 0) return null;
+    return content.slice("# 对话历史摘要".length, separatorIndex).trim() || null;
   }
 
   /**
    * 生成对话摘要
    */
-  private async generateConversationSummary(messages: any[], memberId: string): Promise<string> {
+  private async generateConversationSummary(messages: Message[], memberId: string): Promise<string> {
     const member = this.familyManager.getMember(memberId);
     const memberName = member?.preferredName || member?.name || "未知成员";
     
     // 构建摘要提示
     let conversationText = "";
     for (const msg of messages) {
-      const speaker = msg.role === "user" ? memberName : "管家";
+      if (this.isSessionSummaryMessage(msg)) {
+        conversationText += `既有会话摘要:\n${this.getSessionSummaryContent([msg]) ?? ""}\n`;
+        continue;
+      }
+
+      const speaker = msg.role === "user"
+        ? memberName
+        : msg.role === "assistant"
+          ? "管家"
+          : msg.role === "tool"
+            ? "工具结果"
+            : "系统";
       conversationText += `${speaker}: ${msg.content}\n`;
     }
 
@@ -501,22 +542,6 @@ ${conversationText}
   }
 
   /**
-   * 保存对话摘要到数据库
-   */
-  private saveConversationSummary(memberId: string, messages: any[], summary: string): void {
-    if (messages.length === 0) return;
-
-    const startTime = new Date();
-    const endTime = new Date();
-    
-    try {
-      this.db.saveSummary(memberId, summary, startTime.toISOString(), endTime.toISOString());
-    } catch (error) {
-      console.error(`[ContextManager] 保存对话摘要失败，memberId: ${memberId}`, error);
-    }
-  }
-
-  /**
    * 保存单个会话状态到数据库
    */
   private saveSessionState(memberId: string, session: any): void {
@@ -543,7 +568,7 @@ ${conversationText}
   /**
    * 从数据库恢复会话状态，结合chat_history表的历史记录
    */
-  private restoreSessionFromDatabase(memberId: string): any | null {
+  private restoreSessionFromDatabase(memberId: string): AgentSession | null {
     try {
       const sessionData = this.db.getSessionState(memberId);
       
@@ -571,12 +596,12 @@ ${conversationText}
       const newMessages = recentChats
         .filter(chat => new Date(chat.createdAt) > sessionLastUpdate)
         .reverse() // 按时间顺序排列
-        .map(chat => ({
-          role: chat.role as "user" | "assistant",
+        .map((chat): Message => ({
+          role: chat.role as Message["role"],
           content: chat.content,
         }));
 
-      let finalMessages = sessionData.messages;
+      let finalMessages = sessionData.messages as Message[];
       
       if (newMessages.length > 0) {
         console.log(`[SessionPersistence] 发现 ${newMessages.length} 条新的历史消息，整合到会话中，memberId: ${memberId}`);
@@ -585,9 +610,11 @@ ${conversationText}
 
       // 创建新的会话并恢复状态
       const member = this.familyManager.getMember(memberId);
+      const systemPrompt = this.buildSystemPrompt(member ?? undefined); // 使用最新的系统提示
+      finalMessages = this.normalizeSessionMessages(finalMessages, systemPrompt);
       const session = createAgentSession({
         provider: this.getProvider(),
-        systemPrompt: this.buildSystemPrompt(member ?? undefined), // 使用最新的系统提示
+        systemPrompt,
         tools: this.buildTools(),
         messages: finalMessages,
       });
@@ -605,7 +632,7 @@ ${conversationText}
   /**
    * 从chat_history表恢复会话（用于没有保存会话状态的情况）
    */
-  private restoreSessionFromChatHistory(memberId: string): any | null {
+  private restoreSessionFromChatHistory(memberId: string): AgentSession | null {
     try {
       const recentChats = this.db.getRecentChats(memberId, 30); // 获取最近30条聊天记录
       
@@ -627,15 +654,15 @@ ${conversationText}
       }
 
       // 转换为消息格式（按时间倒序，所以需要reverse）
-      const messages = recentChats.reverse().map(chat => ({
-        role: chat.role as "user" | "assistant",
+      const messages = recentChats.reverse().map((chat): Message => ({
+        role: chat.role as Message["role"],
         content: chat.content,
       }));
 
       // 添加当前系统提示作为第一条消息
       const member = this.familyManager.getMember(memberId);
       const systemPrompt = this.buildSystemPrompt(member ?? undefined);
-      const finalMessages = [
+      const finalMessages: Message[] = [
         { role: "system" as const, content: systemPrompt },
         ...messages,
       ];
@@ -715,16 +742,6 @@ ${conversationText}
     try {
       const latestSummary = this.db.getLatestSummaryDetail(memberId);
       if (!latestSummary) {
-        return null;
-      }
-
-      // 检查摘要是否过于陈旧（超过30天忽略）
-      const summaryDate = new Date(latestSummary.createdAt);
-      const now = new Date();
-      const daysSinceSummary = (now.getTime() - summaryDate.getTime()) / (1000 * 60 * 60 * 24);
-      
-      if (daysSinceSummary > 30) {
-        console.log(`[MemorySummary] 摘要过于陈旧（${daysSinceSummary.toFixed(1)}天），忽略，memberId: ${memberId}`);
         return null;
       }
 
@@ -836,7 +853,7 @@ ${conversationText}
     try {
       console.log('[MemoryManager] 开始执行记忆清理任务');
 
-      // 清理30天前的聊天记录
+      // 只清理已被长期摘要覆盖的30天前聊天记录
       this.db.cleanOldChats(30);
 
       // 清理7天前的会话状态
@@ -1344,10 +1361,6 @@ ${conversationText}
     session.updateSystemPrompt(this.buildSystemPrompt(member ?? undefined));
     this.refreshSessionTools(session);
     
-    // 在用户输入前注入当前时间提醒，确保AI知道准确的时间
-    const { display, iso } = this.formatNow();
-    const timeAwareInput = `[系统时间更新: ${display}, ISO: ${iso}]\n\n${input}`;
-    
     const model = this.config.get().llm.model;
 
     const unsub = session.subscribe((event) => {
@@ -1361,7 +1374,7 @@ ${conversationText}
     }
 
     try {
-      const response = await session.prompt(timeAwareInput);
+      const response = await session.prompt(input);
       this.db.saveChat(memberId, "user", input);
       this.db.saveChat(memberId, "assistant", response);
       
@@ -1482,15 +1495,13 @@ ${conversationText}
    */
   private async buildEnhancedMessage(
     msg: InboundMessage,
-    member: FamilyMember,
   ): Promise<{ message: string; processedMedia: ProcessedMediaInfo[] }> {
-    const { display, iso } = this.formatNow();
-    let enhancedMessage = `[系统时间更新: ${display}, ISO: ${iso}]\n\n`;
+    let enhancedMessage = "";
     const processedMedia: ProcessedMediaInfo[] = [];
 
     // 处理引用消息上下文
     if (msg.references && msg.references.length > 0) {
-      enhancedMessage += await this.buildReferenceContext(msg.references, member);
+      enhancedMessage += this.buildReferenceContext(msg.references);
       enhancedMessage += '\n\n';
     }
 
@@ -1512,41 +1523,8 @@ ${conversationText}
   /**
    * 构建引用消息的上下文
    */
-  private async buildReferenceContext(references: ReferenceContent[], member: FamilyMember): Promise<string> {
-    try {
-      // 使用线程上下文构建器构建完整的对话线程
-      const threads = await this.threadContextBuilder.buildThreadContext(references);
-      
-      if (threads.length === 0) {
-        // 回退到简单的引用处理
-        return this.buildSimpleReferenceContext(references);
-      }
-
-      // 简化线程上下文以节省 token
-      const simplifiedThreads = this.threadContextBuilder.simplifyThreadContext(threads, 8);
-      
-      // 格式化为可读字符串
-      const formattedContext = this.threadContextBuilder.formatThreadContext(simplifiedThreads);
-      
-      // 添加统计信息
-      const stats = this.threadContextBuilder.getThreadStats(simplifiedThreads);
-      let contextWithStats = formattedContext;
-      
-      if (stats.totalMessages > 0) {
-        contextWithStats += `[线程统计: ${stats.totalThreads}个线程, ${stats.totalMessages}条消息`;
-        if (stats.mediaCount > 0) {
-          contextWithStats += `, ${stats.mediaCount}个媒体文件`;
-        }
-        contextWithStats += ']\n';
-      }
-
-      return contextWithStats;
-
-    } catch (error) {
-      console.error('[Butler] 构建引用上下文失败:', error);
-      // 回退到简单的引用处理
-      return this.buildSimpleReferenceContext(references);
-    }
+  private buildReferenceContext(references: ReferenceContent[]): string {
+    return this.buildSimpleReferenceContext(references);
   }
 
   /**
@@ -1783,7 +1761,6 @@ ${conversationText}
     // 构建包含多媒体上下文的消息
     let { message: enhancedMessage, processedMedia: pipelineProcessed } = await this.buildEnhancedMessage(
       msg,
-      member,
     );
 
     const events: Array<{ type: string; data: unknown }> = [];
@@ -1816,7 +1793,7 @@ ${conversationText}
         
         if (errorResult.shouldFallbackToText && errorResult.modifiedMessage) {
           // 使用纯文本降级重试
-          const fallbackBuilt = await this.buildEnhancedMessage(errorResult.modifiedMessage, member);
+          const fallbackBuilt = await this.buildEnhancedMessage(errorResult.modifiedMessage);
           pipelineProcessed = ButlerService.mergeProcessedMediaInfo(
             pipelineProcessed,
             fallbackBuilt.processedMedia,

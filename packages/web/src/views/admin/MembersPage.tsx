@@ -250,7 +250,8 @@ export function MembersPage() {
 
   function getScheduledAiPrompt(routine: Routine): string {
     const aiTask = routine.actions?.find((action) => action.type === "ai_task");
-    return asText(aiTask?.prompt ?? routine.description ?? routine.title);
+    if (!aiTask) return "";
+    return asText(aiTask.prompt ?? routine.description ?? routine.title);
   }
 
   function getScheduledNotifyMessage(routine: Routine): string {
@@ -280,15 +281,25 @@ export function MembersPage() {
     return { ...routine, actions };
   }
 
-  function normalizeRoutineForScheduledAi(routine: Routine): Routine {
+  function normalizeRoutineForScheduledActions(routine: Routine, options?: { seedAiTaskFromFallback?: boolean }): Routine {
     const title = routine.title.trim() || "新习惯";
-    const prompt = getScheduledAiPrompt(routine).trim() || title;
-    const notifyMessage = getScheduledNotifyMessage(routine).trim() || "{{result}}";
+    const prompt = getScheduledAiPrompt(routine).trim()
+      || (options?.seedAiTaskFromFallback ? asText(routine.description ?? routine.title).trim() : "");
+    const hasAiTask = prompt.length > 0;
+    const notifyMessage = getScheduledNotifyMessage(routine).trim() || (hasAiTask ? "{{result}}" : title);
     const actionPrefix = routine.id || `rtn_${Date.now().toString(36)}`;
+    const notifyAction: RoutineAction = {
+      id: `${actionPrefix}_notify`,
+      type: "notify",
+      trigger: hasAiTask ? "after" : "at",
+      offsetMinutes: 0,
+      channel: "wechat",
+      message: notifyMessage,
+    };
     return {
       id: routine.id,
       title,
-      description: prompt,
+      description: prompt || title,
       assigneeMemberIds: routine.assigneeMemberIds,
       weekdays: routine.weekdays,
       time: routine.time ?? defaultTimeForSlot(routine.timeSlot),
@@ -297,24 +308,19 @@ export function MembersPage() {
         message: notifyMessage,
         channel: "wechat",
       }],
-      actions: [
-        {
-          id: `${actionPrefix}_ai_task`,
-          type: "ai_task",
-          trigger: "at",
-          offsetMinutes: 0,
-          channel: "wechat",
-          prompt,
-        },
-        {
-          id: `${actionPrefix}_notify`,
-          type: "notify",
-          trigger: "after",
-          offsetMinutes: 0,
-          channel: "wechat",
-          message: notifyMessage,
-        },
-      ],
+      actions: hasAiTask
+        ? [
+          {
+            id: `${actionPrefix}_ai_task`,
+            type: "ai_task",
+            trigger: "at",
+            offsetMinutes: 0,
+            channel: "wechat",
+            prompt,
+          },
+          notifyAction,
+        ]
+        : [notifyAction],
     };
   }
 
@@ -322,7 +328,7 @@ export function MembersPage() {
     if (!selectedId) return;
     try {
       setPageError(null);
-      const normalizedRoutine = normalizeRoutineForScheduledAi(routine);
+      const normalizedRoutine = normalizeRoutineForScheduledActions(routine);
       await fetch(`/api/routines/${selectedId}/${routine.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -395,7 +401,7 @@ export function MembersPage() {
         await fetch(`/api/members/${selectedId}/apply-routines`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ routines: selected.map(normalizeRoutineForScheduledAi) }),
+          body: JSON.stringify({ routines: selected.map((routine) => normalizeRoutineForScheduledActions(routine, { seedAiTaskFromFallback: true })) }),
         });
       }
       setGeneratedRoutines(null);
@@ -456,6 +462,13 @@ export function MembersPage() {
     if (!slot) return "";
     const labels: Record<string, string> = { morning: "上午", afternoon: "下午", evening: "晚上" };
     return labels[slot] ?? slot;
+  }
+
+  function formatActionTrigger(action: RoutineAction): string {
+    if (action.offsetMinutes === 0) return "到时";
+    if (action.trigger === "before") return `提前${action.offsetMinutes}分`;
+    if (action.trigger === "after") return `延后${action.offsetMinutes}分`;
+    return "到时";
   }
 
   return (
@@ -638,7 +651,7 @@ export function MembersPage() {
                           reminders: [],
                           actions: [],
                         };
-                        setEditingRoutine(normalizeRoutineForScheduledAi(newRoutine));
+                        setEditingRoutine(normalizeRoutineForScheduledActions(newRoutine, { seedAiTaskFromFallback: true }));
                       }}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer"
                     >
@@ -703,7 +716,7 @@ export function MembersPage() {
                                     navigate("/admin/family");
                                     return;
                                   }
-                                  setEditingRoutine(normalizeRoutineForScheduledAi({
+                                  setEditingRoutine(normalizeRoutineForScheduledActions({
                                     ...routine,
                                     title: asText(routine.title),
                                     description: asText(routine.description),
@@ -732,7 +745,6 @@ export function MembersPage() {
                               {(routine.actions ?? []).map((a) => {
                                 const icons: Record<string, string> = { notify: "🔔", plugin: "🔧", ai_task: "🤖" };
                                 const labels: Record<string, string> = { notify: "通知", plugin: "插件", ai_task: "AI" };
-                                const trigLabels: Record<string, string> = { before: "提前", at: "到时", after: "延后" };
                                 const colors: Record<string, string> = {
                                   notify: "bg-blue-50 text-blue-600",
                                   plugin: "bg-teal-50 text-teal-600",
@@ -740,7 +752,7 @@ export function MembersPage() {
                                 };
                                 return (
                                   <span key={a.id} className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded ${colors[a.type] ?? "bg-stone-100 text-stone-600"}`}>
-                                    {icons[a.type]} {trigLabels[a.trigger]}{a.trigger !== "at" ? `${a.offsetMinutes}分` : ""}
+                                    {icons[a.type]} {formatActionTrigger(a)}
                                     {a.type === "notify" && a.message ? `: ${a.message}` : ""}
                                     {a.type === "plugin" && a.toolName ? `: ${a.toolName}` : ""}
                                     {a.type === "ai_task" ? `: ${labels[a.type]}` : ""}
@@ -1319,7 +1331,7 @@ export function MembersPage() {
                     const currentPrompt = getScheduledAiPrompt(editingRoutine);
                     const nextRoutine = { ...editingRoutine, title: nextTitle };
                     setEditingRoutine(
-                      !currentPrompt.trim() || currentPrompt === editingRoutine.title
+                      currentPrompt === editingRoutine.title
                         ? upsertRoutineActionDraft(nextRoutine, {
                             type: "ai_task",
                             trigger: "at",
@@ -1335,7 +1347,7 @@ export function MembersPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-stone-500 mb-1">AI 任务内容</label>
+                <label className="block text-xs font-medium text-stone-500 mb-1">AI 任务内容（可选）</label>
                 <textarea
                   value={getScheduledAiPrompt(editingRoutine)}
                   onChange={(e) => {
@@ -1408,7 +1420,7 @@ export function MembersPage() {
 
               <div className="p-3 rounded-lg bg-stone-50 border border-stone-200">
                 <p className="text-xs text-stone-500">
-                  通知内容可使用 {"{{result}}"} 引用 AI 任务返回内容。
+                  留空 AI 任务内容时只发送微信通知，不执行 AI。通知内容可使用 {"{{result}}"} 引用 AI 任务返回内容。
                 </p>
               </div>
             </div>
@@ -1424,7 +1436,6 @@ export function MembersPage() {
                 onClick={() => saveRoutine(editingRoutine)}
                 disabled={
                   !editingRoutine.title.trim()
-                  || !getScheduledAiPrompt(editingRoutine).trim()
                   || !getScheduledNotifyMessage(editingRoutine).trim()
                   || editingRoutine.weekdays.length === 0
                   || !editingRoutine.time

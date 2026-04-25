@@ -179,6 +179,7 @@ export class ModelManager {
         model: modelConfig.model,
         timeout: modelConfig.timeout,
         thinkingMode: modelConfig.thinkingMode,
+        timeZone: this.config.get().timezone,
       });
 
       // 发送一个简单的测试消息

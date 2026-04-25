@@ -203,15 +203,15 @@ export class Database {
 
   saveChat(memberId: string, role: string, content: string, toolCalls?: string, toolCallId?: string): void {
     this.db.prepare(
-      `INSERT INTO chat_history (member_id, role, content, tool_calls, tool_call_id) VALUES (?, ?, ?, ?, ?)`,
-    ).run(memberId, role, content, toolCalls ?? null, toolCallId ?? null);
+      `INSERT INTO chat_history (member_id, role, content, tool_calls, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(memberId, role, content, toolCalls ?? null, toolCallId ?? null, new Date().toISOString());
   }
 
   getRecentChats(memberId: string, limit = 50): ChatRecord[] {
     return this.db
       .prepare(
         `SELECT id, member_id as memberId, role, content, created_at as createdAt
-         FROM chat_history WHERE member_id = ? ORDER BY created_at DESC LIMIT ?`,
+         FROM chat_history WHERE member_id = ? ORDER BY datetime(created_at) DESC, id DESC LIMIT ?`,
       )
       .all(memberId, limit) as ChatRecord[];
   }
@@ -224,8 +224,8 @@ export class Database {
       .prepare(
         `SELECT id, member_id as memberId, role, content, created_at as createdAt
          FROM chat_history 
-         WHERE member_id = ? AND created_at >= ? AND created_at <= ?
-         ORDER BY created_at ASC`,
+         WHERE member_id = ? AND datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)
+         ORDER BY datetime(created_at) ASC, id ASC`,
       )
       .all(memberId, startDate, endDate) as ChatRecord[];
   }
@@ -233,15 +233,15 @@ export class Database {
   saveSummary(memberId: string, summary: string, periodStart: string, periodEnd: string): void {
     this.db
       .prepare(
-        `INSERT INTO memory_summaries (member_id, summary, period_start, period_end) VALUES (?, ?, ?, ?)`,
+        `INSERT INTO memory_summaries (member_id, summary, period_start, period_end, created_at) VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(memberId, summary, periodStart, periodEnd);
+      .run(memberId, summary, periodStart, periodEnd, new Date().toISOString());
   }
 
   getLatestSummary(memberId: string): string | null {
     const row = this.db
       .prepare(
-        `SELECT summary FROM memory_summaries WHERE member_id = ? ORDER BY created_at DESC LIMIT 1`,
+        `SELECT summary FROM memory_summaries WHERE member_id = ? ORDER BY datetime(created_at) DESC, id DESC LIMIT 1`,
       )
       .get(memberId) as { summary: string } | undefined;
     return row?.summary ?? null;
@@ -253,7 +253,7 @@ export class Database {
   getLatestSummaryDetail(memberId: string): { summary: string; createdAt: string; periodEnd: string } | null {
     const row = this.db
       .prepare(
-        `SELECT summary, created_at, period_end FROM memory_summaries WHERE member_id = ? ORDER BY created_at DESC LIMIT 1`,
+        `SELECT summary, created_at, period_end FROM memory_summaries WHERE member_id = ? ORDER BY datetime(created_at) DESC, id DESC LIMIT 1`,
       )
       .get(memberId) as { summary: string; created_at: string; period_end: string } | undefined;
     
@@ -551,7 +551,14 @@ export class Database {
   cleanOldChats(daysToKeep = 30): number {
     const result = this.db
       .prepare(
-        `DELETE FROM chat_history WHERE created_at < datetime('now', ?)`,
+        `DELETE FROM chat_history
+         WHERE datetime(created_at) < datetime('now', ?)
+           AND EXISTS (
+             SELECT 1
+             FROM memory_summaries
+             WHERE memory_summaries.member_id = chat_history.member_id
+               AND datetime(memory_summaries.period_end) >= datetime(chat_history.created_at)
+           )`,
       )
       .run(`-${daysToKeep} days`);
     return result.changes;
@@ -573,11 +580,12 @@ export class Database {
    */
   saveSessionState(memberId: string, messages: any[], systemPrompt: string): void {
     const messagesJson = JSON.stringify(messages);
+    const now = new Date().toISOString();
     
     this.db.prepare(`
-      INSERT OR REPLACE INTO session_states (member_id, messages_json, system_prompt, updated_at)
-      VALUES (?, ?, ?, datetime('now'))
-    `).run(memberId, messagesJson, systemPrompt);
+      INSERT OR REPLACE INTO session_states (member_id, messages_json, system_prompt, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(memberId, messagesJson, systemPrompt, now, now);
   }
 
   /**
@@ -621,7 +629,7 @@ export class Database {
     const results = this.db.prepare(`
       SELECT member_id, messages_json, system_prompt, updated_at
       FROM session_states 
-      ORDER BY updated_at DESC
+      ORDER BY datetime(updated_at) DESC
     `).all() as { member_id: string; messages_json: string; system_prompt: string; updated_at: string }[];
 
     const sessions: { memberId: string; messages: any[]; systemPrompt: string; updatedAt: string }[] = [];

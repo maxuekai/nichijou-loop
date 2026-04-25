@@ -69,6 +69,18 @@ export class AgentSession {
     }
   }
 
+  replaceMessages(messages: Message[], systemPrompt?: string): void {
+    const nextMessages = [...messages];
+    const prompt = systemPrompt ?? this._state.systemPrompt;
+
+    if (nextMessages.length === 0 || nextMessages[0]!.role !== "system") {
+      nextMessages.unshift({ role: "system", content: prompt });
+    }
+
+    this._state.messages = nextMessages;
+    this._state.systemPrompt = systemPrompt ?? nextMessages[0]!.content;
+  }
+
   updateTools(tools: AgentSessionOptions["tools"] = []): void {
     const nextTools = tools ?? [];
     this._state.tools = nextTools;

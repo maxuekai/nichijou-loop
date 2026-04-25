@@ -42,6 +42,8 @@ interface OpenAITool {
   };
 }
 
+const DEFAULT_TIME_ZONE = "Asia/Shanghai";
+
 /** Convert image file to base64 data URL */
 async function imageToBase64DataUrl(filePath: string, mimeType?: string): Promise<string> {
   const buffer = await fs.readFile(filePath);
@@ -159,6 +161,58 @@ function isDeepSeekProvider(config: ProviderConfig): boolean {
   return provider === "deepseek" || baseUrl.includes("deepseek.com");
 }
 
+function normalizeTimeZone(timeZone?: string): string {
+  if (!timeZone) return DEFAULT_TIME_ZONE;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return DEFAULT_TIME_ZONE;
+  }
+}
+
+function getTimeZoneOffset(date: Date, timeZone: string): string {
+  const utc = new Date(date.toLocaleString("en-US", { timeZone: "UTC" }));
+  const local = new Date(date.toLocaleString("en-US", { timeZone }));
+  const diffMinutes = (local.getTime() - utc.getTime()) / 60000;
+  const sign = diffMinutes >= 0 ? "+" : "-";
+  const hours = String(Math.floor(Math.abs(diffMinutes) / 60)).padStart(2, "0");
+  const minutes = String(Math.abs(diffMinutes) % 60).padStart(2, "0");
+  return `${sign}${hours}:${minutes}`;
+}
+
+function buildCurrentTimeMessage(timeZone: string): OpenAIMessage {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    weekday: "long",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  const display = `${get("year")}年${get("month")}月${get("day")}日 ${get("weekday")} ${hour}:${get("minute")}:${get("second")}`;
+  const localIso = now.toLocaleString("sv-SE", { timeZone }).replace(" ", "T");
+  const offset = getTimeZoneOffset(now, timeZone);
+
+  return {
+    role: "system",
+    content: [
+      "# 当前时间",
+      "",
+      `现在是 ${display}`,
+      `ISO: ${localIso}${offset} (${timeZone})`,
+      `UTC: ${now.toISOString()}`,
+      "请根据此精确时间推算用户描述中涉及的具体日期时间。当用户说「明天」「后天」「下周一」等相对时间时，必须以此时间为基准计算。",
+    ].join("\n"),
+  };
+}
+
 function toOpenAITools(tools: ToolDefinition[]): OpenAITool[] {
   return tools.map((t) => ({
     type: "function" as const,
@@ -201,6 +255,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.config = {
       ...config,
       baseUrl: config.baseUrl.replace(/\/+$/, ""),
+      timeZone: normalizeTimeZone(config.timeZone),
     };
   }
 
@@ -338,9 +393,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
   ): Promise<Record<string, unknown>> {
     const deepSeek = isDeepSeekProvider(this.config);
     const thinkingEnabled = this.config.thinkingMode === true;
+    const messages = await toOpenAIMessages(request.messages, thinkingEnabled);
     const body: Record<string, unknown> = {
       model: request.model ?? this.config.model,
-      messages: await toOpenAIMessages(request.messages, thinkingEnabled),
+      messages: [buildCurrentTimeMessage(this.config.timeZone ?? DEFAULT_TIME_ZONE), ...messages],
       stream,
     };
     if (deepSeek) {
