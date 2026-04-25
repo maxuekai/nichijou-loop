@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "../../api";
+import { Select } from "../../components/ui/Select";
 
 interface ReminderItem {
   id: string;
@@ -15,6 +16,18 @@ interface MemberInfo {
   id: string;
   name: string;
 }
+
+const REMINDER_STATUS_OPTIONS = [
+  { value: "all", label: "全部状态" },
+  { value: "pending", label: "待触发" },
+  { value: "done", label: "已完成" },
+];
+
+const REMINDER_CHANNEL_OPTIONS = [
+  { value: "wechat", label: "微信" },
+  { value: "dashboard", label: "面板" },
+  { value: "both", label: "两者" },
+];
 
 export function RemindersPage() {
   const [reminders, setReminders] = useState<ReminderItem[]>([]);
@@ -145,25 +158,21 @@ export function RemindersPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <select
+          <Select
             value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as "all" | "pending" | "done")}
-            className="px-3 py-2 rounded-lg border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-          >
-            <option value="all">全部状态</option>
-            <option value="pending">待触发</option>
-            <option value="done">已完成</option>
-          </select>
-          <select
+            onChange={(next) => setFilterStatus(next as "all" | "pending" | "done")}
+            options={REMINDER_STATUS_OPTIONS}
+            className="w-36"
+          />
+          <Select
             value={filterMember}
-            onChange={(e) => setFilterMember(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-          >
-            <option value="all">全部成员</option>
-            {members.map((m) => (
-              <option key={m.id} value={m.id}>{m.name}</option>
-            ))}
-          </select>
+            onChange={setFilterMember}
+            options={[
+              { value: "all", label: "全部成员" },
+              ...members.map((m) => ({ value: m.id, label: m.name })),
+            ]}
+            className="w-40"
+          />
           <button
             onClick={openCreate}
             className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700 transition-colors"
@@ -263,15 +272,12 @@ export function RemindersPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-stone-700 mb-1">通道</label>
-                <select
+                <Select
                   value={form.channel}
-                  onChange={(e) => setForm({ ...form, channel: e.target.value })}
-                  className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-                >
-                  <option value="wechat">微信</option>
-                  <option value="dashboard">面板</option>
-                  <option value="both">两者</option>
-                </select>
+                  onChange={(next) => setForm({ ...form, channel: next })}
+                  options={REMINDER_CHANNEL_OPTIONS}
+                  className="w-full"
+                />
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6">
@@ -301,15 +307,14 @@ export function RemindersPage() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-stone-700 mb-1">成员</label>
-                <select
+                <Select
                   value={form.memberId}
-                  onChange={(e) => setForm({ ...form, memberId: e.target.value })}
-                  className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-                >
-                  {members.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
+                  onChange={(next) => setForm({ ...form, memberId: next })}
+                  options={members.map((m) => ({ value: m.id, label: m.name }))}
+                  placeholder="选择成员"
+                  disabled={members.length === 0}
+                  className="w-full"
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-stone-700 mb-1">提醒内容</label>
@@ -332,15 +337,12 @@ export function RemindersPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-stone-700 mb-1">通道</label>
-                <select
+                <Select
                   value={form.channel}
-                  onChange={(e) => setForm({ ...form, channel: e.target.value })}
-                  className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-                >
-                  <option value="wechat">微信</option>
-                  <option value="dashboard">面板</option>
-                  <option value="both">两者</option>
-                </select>
+                  onChange={(next) => setForm({ ...form, channel: next })}
+                  options={REMINDER_CHANNEL_OPTIONS}
+                  className="w-full"
+                />
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6">

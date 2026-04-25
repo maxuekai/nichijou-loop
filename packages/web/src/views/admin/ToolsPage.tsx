@@ -5,6 +5,7 @@ import {
   ChevronDownIcon,
 } from "@heroicons/react/24/outline";
 import { createIconWrapper } from "../../components/ui/Icon";
+import { Select } from "../../components/ui/Select";
 
 // 创建包装过的图标组件
 const ToolIcon = createIconWrapper(WrenchScrewdriverIcon);
@@ -167,26 +168,26 @@ export function ToolsPage() {
                                   <p className="text-[11px] text-stone-400 mb-1.5">{schema.description}</p>
                                 )}
                                 {schema.type === "boolean" ? (
-                                  <select
+                                  <Select
                                     value={paramValues[key] ?? ""}
-                                    onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value })}
-                                    className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"
-                                  >
-                                    <option value="">--</option>
-                                    <option value="true">true</option>
-                                    <option value="false">false</option>
-                                  </select>
+                                    onChange={(next) => setParamValues({ ...paramValues, [key]: next })}
+                                    className="w-full"
+                                    options={[
+                                      { value: "", label: "--" },
+                                      { value: "true", label: "true" },
+                                      { value: "false", label: "false" },
+                                    ]}
+                                  />
                                 ) : schema.enum ? (
-                                  <select
+                                  <Select
                                     value={paramValues[key] ?? ""}
-                                    onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value })}
-                                    className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"
-                                  >
-                                    <option value="">--</option>
-                                    {schema.enum.map((v) => (
-                                      <option key={v} value={v}>{v}</option>
-                                    ))}
-                                  </select>
+                                    onChange={(next) => setParamValues({ ...paramValues, [key]: next })}
+                                    className="w-full"
+                                    options={[
+                                      { value: "", label: "--" },
+                                      ...schema.enum.map((v) => ({ value: v, label: v })),
+                                    ]}
+                                  />
                                 ) : (
                                   <input
                                     type={schema.type === "number" ? "number" : "text"}

@@ -7,6 +7,7 @@ import {
 } from "@heroicons/react/24/outline";
 import type { ConversationLogWithMedia, MediaContent, SystemLogEntry } from "@nichijou/shared";
 import { createIconWrapper } from "../../components/ui/Icon";
+import { Select } from "../../components/ui/Select";
 import { MediaContentSection, ProcessedMediaInfo } from "../../components/multimedia";
 import { api } from "../../api";
 
@@ -147,18 +148,19 @@ export function LogsPage() {
             清理日志
           </button>
           {activeTab === "conversation" && (
-            <select
+            <Select
               value={filterMember}
-              onChange={(e) => setFilterMember(e.target.value)}
-              className="px-3 py-2 rounded-lg border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-            >
-              <option value="all">全部成员 ({logs.length})</option>
-              {memberNames.map((name) => (
-                <option key={name} value={name}>
-                  {name} ({logs.filter((l) => l.memberName === name).length})
-                </option>
-              ))}
-            </select>
+              onChange={setFilterMember}
+              options={[
+                { value: "all", label: `全部成员 (${logs.length})` },
+                ...memberNames.map((name) => ({
+                  value: name,
+                  label: `${name} (${logs.filter((l) => l.memberName === name).length})`,
+                })),
+              ]}
+              className="w-48"
+              align="right"
+            />
           )}
         </div>
       </div>

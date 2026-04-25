@@ -13,6 +13,7 @@ import {
   ComputerDesktopIcon,
 } from "@heroicons/react/24/outline";
 import { createIconWrapper } from "../../components/ui/Icon";
+import { Select } from "../../components/ui/Select";
 
 // 创建包装过的图标组件
 const ChevronIcon = createIconWrapper(ChevronDownIcon);
@@ -363,18 +364,18 @@ export function ModelsPage() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-stone-700 mb-2">选择预设</label>
-              <select
+              <Select
                 value={selectedPreset}
-                onChange={(e) => handlePresetChange(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-              >
-                <option value="">自定义配置</option>
-                {MODEL_PRESETS.map(preset => (
-                  <option key={preset.name} value={preset.name}>
-                    {preset.name} {preset.needsKey ? "(需要API Key)" : "(本地)"}
-                  </option>
-                ))}
-              </select>
+                onChange={handlePresetChange}
+                className="w-full"
+                options={[
+                  { value: "", label: "自定义配置" },
+                  ...MODEL_PRESETS.map((preset) => ({
+                    value: preset.name,
+                    label: `${preset.name} ${preset.needsKey ? "(需要API Key)" : "(本地)"}`,
+                  })),
+                ]}
+              />
             </div>
 
             <div className="grid grid-cols-2 gap-4">

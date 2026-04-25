@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { api } from "../../api";
+import { Select } from "../../components/ui/Select";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -46,13 +47,14 @@ export function ChatPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-stone-800">与管家对话</h1>
-        <select
+        <Select
           value={selectedMember}
-          onChange={(e) => { setSelectedMember(e.target.value); setMessages([]); }}
-          className="px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-        >
-          {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-        </select>
+          onChange={(next) => { setSelectedMember(next); setMessages([]); }}
+          options={members.map((m) => ({ value: m.id, label: m.name }))}
+          placeholder="暂无成员"
+          disabled={members.length === 0}
+          className="w-44"
+        />
       </div>
 
       <div className="bg-white rounded-xl border border-stone-200 flex flex-col" style={{ height: "calc(100vh - 240px)" }}>

@@ -10,6 +10,7 @@ import {
   ExclamationTriangleIcon,
 } from "@heroicons/react/24/outline";
 import { createIconWrapper } from "../../components/ui/Icon";
+import { Select } from "../../components/ui/Select";
 
 // 创建包装过的图标组件
 const DeleteIcon = createIconWrapper(TrashIcon);
@@ -1343,15 +1344,16 @@ export function MembersPage() {
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-stone-500 mb-1">计划类型</label>
-                <select
+                <Select
                   value={editingOverride.action}
-                  onChange={(e) => setEditingOverride({ ...editingOverride, action: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                >
-                  <option value="skip">暂停（跳过某段时间内的习惯）</option>
-                  <option value="add">新增（在时间段内执行内容）</option>
-                  <option value="modify">调整（替换原习惯执行内容）</option>
-                </select>
+                  onChange={(next) => setEditingOverride({ ...editingOverride, action: next })}
+                  options={[
+                    { value: "skip", label: "暂停（跳过某段时间内的习惯）" },
+                    { value: "add", label: "新增（在时间段内执行内容）" },
+                    { value: "modify", label: "调整（替换原习惯执行内容）" },
+                  ]}
+                  className="w-full"
+                />
               </div>
 
               <div>
@@ -1441,33 +1443,34 @@ export function MembersPage() {
 
               <div>
                 <label className="block text-xs font-medium text-stone-500 mb-1">时段（可选）</label>
-                <select
+                <Select
                   value={editingOverride.timeSlot ?? ""}
-                  onChange={(e) => setEditingOverride({ ...editingOverride, timeSlot: e.target.value || undefined })}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                >
-                  <option value="">全天</option>
-                  <option value="morning">上午</option>
-                  <option value="afternoon">下午</option>
-                  <option value="evening">晚上</option>
-                </select>
+                  onChange={(next) => setEditingOverride({ ...editingOverride, timeSlot: next || undefined })}
+                  options={[
+                    { value: "", label: "全天" },
+                    { value: "morning", label: "上午" },
+                    { value: "afternoon", label: "下午" },
+                    { value: "evening", label: "晚上" },
+                  ]}
+                  className="w-full"
+                />
               </div>
 
               {(editingOverride.action === "skip" || editingOverride.action === "modify") && detail && detail.routines.length > 0 && (
                 <div>
                   <label className="block text-xs font-medium text-stone-500 mb-1">覆盖的 7 days 习惯</label>
-                  <select
+                  <Select
                     value={editingOverride.routineId ?? ""}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, routineId: e.target.value || undefined })}
-                    className="w-full px-3 py-2 rounded-lg border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  >
-                    <option value="">所有习惯（该时段内全部覆盖）</option>
-                    {detail.routines.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.title} ({formatWeekdays(r.weekdays)}{r.time ? ` ${r.time}` : ""})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(next) => setEditingOverride({ ...editingOverride, routineId: next || undefined })}
+                    options={[
+                      { value: "", label: "所有习惯（该时段内全部覆盖）" },
+                      ...detail.routines.map((r) => ({
+                        value: r.id,
+                        label: `${r.title} (${formatWeekdays(r.weekdays)}${r.time ? ` ${r.time}` : ""})`,
+                      })),
+                    ]}
+                    className="w-full"
+                  />
                 </div>
               )}
 
