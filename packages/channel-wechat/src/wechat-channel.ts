@@ -321,6 +321,12 @@ export class WeChatChannel implements Channel {
       }
 
       try {
+        this.database.recordWechatInboundActivity(conn.memberId);
+      } catch (error) {
+        console.error(`[WeChat] 记录活跃时间失败 (${conn.memberId}):`, error);
+      }
+
+      try {
         // Get or create multimedia parser for this connection
         let parser = this.messageParsers.get(connectionId);
         if (!parser) {

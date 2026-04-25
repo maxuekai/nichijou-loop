@@ -7,7 +7,6 @@ export class ActivityReminderScheduler {
   private gateway: Gateway;
   private familyManager: FamilyManager;
   private timer: NodeJS.Timeout | null = null;
-  private sentReminders = new Set<string>(); // Track sent reminders to avoid duplicates
 
   constructor(db: Database, gateway: Gateway, familyManager: FamilyManager) {
     this.db = db;
@@ -27,9 +26,9 @@ export class ActivityReminderScheduler {
   private async checkAndSendReminders(): Promise<void> {
     try {
       const members = this.familyManager.getMembers();
-      const lastMessageTimes = this.db.getMemberLastMessageTimes();
-      const lastMessageMap = new Map(
-        lastMessageTimes.map(item => [item.memberId, item.lastMessageTime])
+      const activityStates = this.db.getWechatActivityStates();
+      const activityMap = new Map(
+        activityStates.map((state) => [state.memberId, state])
       );
 
       for (const member of members) {
@@ -38,30 +37,30 @@ export class ActivityReminderScheduler {
           continue;
         }
 
-        const lastMessageTime = lastMessageMap.get(member.id);
-        if (!lastMessageTime) {
-          // Member has never sent a message, skip
+        const activity = activityMap.get(member.id);
+        const lastInboundAt = activity?.lastInboundAt ? Date.parse(activity.lastInboundAt) : NaN;
+        if (!Number.isFinite(lastInboundAt)) {
+          // Member has never sent a tracked WeChat message, skip
           continue;
         }
 
-        const lastMessageDate = new Date(lastMessageTime);
         const now = new Date();
-        const hoursSinceLastMessage = (now.getTime() - lastMessageDate.getTime()) / (1000 * 60 * 60);
+        const hoursSinceLastInbound = (now.getTime() - lastInboundAt) / (1000 * 60 * 60);
 
-        // Check if it's been more than 23 hours since last message
-        if (hoursSinceLastMessage >= 23) {
-          const reminderKey = `${member.id}_${lastMessageDate.toISOString().split('T')[0]}`;
-          
-          // Check if we've already sent a reminder for this day
-          if (!this.sentReminders.has(reminderKey)) {
-            await this.sendActivityReminder(member.id);
-            this.sentReminders.add(reminderKey);
-          }
+        // Send at most one reminder attempt per inbound-message window.
+        const lastReminderAttemptAt = activity?.lastReminderAttemptAt
+          ? Date.parse(activity.lastReminderAttemptAt)
+          : NaN;
+        const hasReminderForCurrentWindow =
+          Number.isFinite(lastReminderAttemptAt) && lastReminderAttemptAt > lastInboundAt;
+
+        // Check if it's been more than 23 hours since last tracked inbound WeChat message.
+        if (hoursSinceLastInbound >= 23 && !hasReminderForCurrentWindow) {
+          const attemptAt = now.toISOString();
+          this.db.markWechatActivityReminderAttempt(member.id, attemptAt);
+          await this.sendActivityReminder(member.id);
         }
       }
-
-      // Clean up old reminder records (keep only last 7 days)
-      this.cleanupOldReminderRecords();
     } catch (err) {
       console.error("[ActivityReminder] 检查活跃提醒时出错:", err);
     }
@@ -91,31 +90,11 @@ export class ActivityReminderScheduler {
     }
   }
 
-  private cleanupOldReminderRecords(): void {
-    const now = new Date();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const cutoffDate = sevenDaysAgo.toISOString().split('T')[0];
-    
-    // Remove old reminder records
-    const keysToRemove: string[] = [];
-    for (const key of this.sentReminders) {
-      const [, dateStr] = key.split('_');
-      if (dateStr && dateStr < cutoffDate) {
-        keysToRemove.push(key);
-      }
-    }
-    
-    for (const key of keysToRemove) {
-      this.sentReminders.delete(key);
-    }
-  }
-
   shutdown(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
-    this.sentReminders.clear();
     console.log("[ActivityReminder] 微信活跃提醒调度器已停止");
   }
 }

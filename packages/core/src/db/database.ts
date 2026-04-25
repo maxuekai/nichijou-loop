@@ -27,6 +27,12 @@ export interface ReminderLog {
   channel: string;
 }
 
+export interface WeChatActivityState {
+  memberId: string;
+  lastInboundAt: string | null;
+  lastReminderAttemptAt: string | null;
+}
+
 export class Database {
   private db: BetterSqlite3.Database;
 
@@ -152,6 +158,17 @@ export class Database {
 
       CREATE INDEX IF NOT EXISTS idx_action_exec
         ON action_execution_log(member_id, routine_id, action_id, executed_at);
+
+      CREATE TABLE IF NOT EXISTS wechat_activity_state (
+        member_id TEXT PRIMARY KEY,
+        last_inbound_at TEXT,
+        last_reminder_attempt_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_wechat_activity_last_inbound
+        ON wechat_activity_state(last_inbound_at);
 
       CREATE TABLE IF NOT EXISTS session_states (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -719,6 +736,38 @@ export class Database {
          GROUP BY member_id`,
       )
       .all() as { memberId: string; lastMessageTime: string }[];
+  }
+
+  // --- WeChat activity state ---
+
+  recordWechatInboundActivity(memberId: string, at = new Date().toISOString()): void {
+    this.db.prepare(`
+      INSERT INTO wechat_activity_state (member_id, last_inbound_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(member_id) DO UPDATE SET
+        last_inbound_at = excluded.last_inbound_at,
+        updated_at = excluded.updated_at
+    `).run(memberId, at, at, at);
+  }
+
+  markWechatActivityReminderAttempt(memberId: string, at = new Date().toISOString()): void {
+    this.db.prepare(`
+      INSERT INTO wechat_activity_state (member_id, last_reminder_attempt_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(member_id) DO UPDATE SET
+        last_reminder_attempt_at = excluded.last_reminder_attempt_at,
+        updated_at = excluded.updated_at
+    `).run(memberId, at, at, at);
+  }
+
+  getWechatActivityStates(): WeChatActivityState[] {
+    return this.db.prepare(`
+      SELECT
+        member_id as memberId,
+        last_inbound_at as lastInboundAt,
+        last_reminder_attempt_at as lastReminderAttemptAt
+      FROM wechat_activity_state
+    `).all() as WeChatActivityState[];
   }
 
   /**

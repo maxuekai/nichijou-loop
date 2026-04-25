@@ -2303,6 +2303,7 @@ ${conversationText}
       if (ch) {
         ch.bindMember(connectionId, existingMember.id);
         this.familyManager.bindChannel(existingMember.id, "wechat", connectionId);
+        this.db.recordWechatInboundActivity(existingMember.id);
       }
 
       await send(`已绑定到「${existingMember.name}」！现在你可以直接和管家对话了。`);
